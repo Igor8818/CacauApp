@@ -39,9 +39,9 @@ import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.data.RotaColeta
+import com.example.myapplication.data.DetectionResult
 import com.example.myapplication.userinterface.TelaConfiguracaoModelo
 import com.example.myapplication.userinterface.util.*
-import org.tensorflow.lite.task.vision.detector.Detection
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -316,11 +316,10 @@ fun TelaPrincipalCapturaOtimizada(
     var cameraAtiva by remember { mutableStateOf(false) }
     var menuClonesExpandido by remember { mutableStateOf(false) }
     var mostrarDialogLabels by remember { mutableStateOf(false) }
-    var deteccoesAtuais by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    var deteccoesAtuais by remember { mutableStateOf<List<DetectionResult>>(emptyList()) }
 
     val imageCapture = remember { ImageCapture.Builder().build() }
 
-    // Recria o detector sempre que a config de modelo mudar
     val detectorHelper = remember(modelConfig) {
         criarDetectorHelper(context, modelConfig) { deteccoesAtuais = it }
     }
@@ -413,7 +412,6 @@ fun TelaPrincipalCapturaOtimizada(
         Box(Modifier.fillMaxSize()) {
             CameraWithAI(detectorHelper, imageCapture) { deteccoesAtuais = it }
 
-            // Filtra usando os labels da config (vazio = aceita tudo)
             val listaFiltrada = deteccoesAtuais.filter { det ->
                 val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
                 val score = det.categories.firstOrNull()?.score ?: 0f
@@ -520,7 +518,7 @@ fun TelaModoFieldBook(
     val context = LocalContext.current
     var indiceAtual by rememberSaveable { mutableIntStateOf(0) }
     var cameraAtiva by remember { mutableStateOf(false) }
-    var deteccoesAtuais by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    var deteccoesAtuais by remember { mutableStateOf<List<DetectionResult>>(emptyList()) }
     val imageCapture = remember { ImageCapture.Builder().build() }
 
     val detectorHelper = remember(modelConfig) {
@@ -770,7 +768,7 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
 fun criarDetectorHelper(
     context: android.content.Context,
     config: ModelConfig,
-    onResults: (List<Detection>) -> Unit
+    onResults: (List<DetectionResult>) -> Unit
 ): ObjectDetectorHelper {
     val source = when {
         config.modeloExternoUri != null ->

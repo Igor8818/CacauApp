@@ -1,4 +1,4 @@
-package com.example.myapplication.userinterface.util
+﻿package com.example.myapplication.userinterface.util
 
 import android.content.ContentValues
 import android.content.Context
@@ -17,19 +17,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import org.tensorflow.lite.task.vision.detector.Detection
+import com.example.myapplication.data.DetectionResult
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-// Executor dedicado — inferência nunca roda na main thread
+// Executor dedicado — inferencia nunca roda na main thread
 private val inferenceExecutor = Executors.newSingleThreadExecutor()
 
 @Composable
 fun CameraWithAI(
     helper: ObjectDetectorHelper,
     capture: ImageCapture,
-    onResultsUpdated: (List<Detection>) -> Unit
+    onResultsUpdated: (List<DetectionResult>) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -38,23 +38,22 @@ fun CameraWithAI(
     androidx.compose.ui.viewinterop.AndroidView(factory = { ctx ->
         val view = PreviewView(ctx)
 
-        // Throttle: evita enfileirar inferências quando o modelo é lento
+        // Throttle: evita enfileirar inferencias quando o modelo eh lento
         val inferenceRunning = AtomicBoolean(false)
         val lastInferenceMs = AtomicLong(0L)
-        val minIntervalMs = 1000L // modelo 1280px é pesado — 1 inferência/segundo
+        val minIntervalMs = 1000L // 1 inferencia/segundo para modelos pesados
 
         providerFuture.addListener({
             val provider = providerFuture.get()
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(view.surfaceProvider) }
 
             val analyzer = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))               // frame menor = menos memória
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST) // descarta frames velhos
+                .setTargetResolution(Size(640, 480))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build().also { analysis ->
                     analysis.setAnalyzer(inferenceExecutor) { proxy ->
                         val now = System.currentTimeMillis()
 
-                        // Pula frame se inferência ainda está rodando ou intervalo não passou
                         if (inferenceRunning.get() || (now - lastInferenceMs.get()) < minIntervalMs) {
                             proxy.close()
                             return@setAnalyzer
@@ -65,10 +64,10 @@ fun CameraWithAI(
 
                         try {
                             val bitmap = proxy.toBitmap()
-                            proxy.close() // libera o buffer da câmera imediatamente
+                            proxy.close()
 
                             helper.setListener(object : ObjectDetectorHelper.DetectorListener {
-                                override fun onResults(results: List<Detection>) {
+                                override fun onResults(results: List<DetectionResult>) {
                                     onResultsUpdated(results)
                                 }
                                 override fun onError(mensagem: String) {

@@ -1,13 +1,13 @@
-package com.example.myapplication.userinterface.util
+﻿package com.example.myapplication.userinterface.util
 
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.net.Uri
 import android.util.Log
+import com.example.myapplication.data.DetectionCategory
+import com.example.myapplication.data.DetectionResult
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.task.vision.detector.Detection
-import org.tensorflow.lite.support.label.Category
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -15,9 +15,9 @@ import java.nio.ByteOrder
 import kotlin.math.exp
 
 /**
- * Helper de detecção que usa APENAS o Interpreter direto do TFLite.
- * A Task API (ObjectDetector) foi removida porque causa UnsatisfiedLinkError
- * no deinitJni em alguns dispositivos, forçando reloads desnecessários.
+ * Helper de deteccao que usa APENAS o Interpreter direto do TFLite.
+ * Tipos proprios DetectionResult/DetectionCategory substituem os da
+ * task-vision (removida por incompatibilidade de AndroidManifest com AGP 9).
  */
 class ObjectDetectorHelper(
     val context: Context,
@@ -34,14 +34,13 @@ class ObjectDetectorHelper(
 
     private var interpreter: Interpreter? = null
 
-    // Configuração do modelo — preenchida ao inspecionar shapes
+    // Configuracao do modelo — preenchida ao inspecionar shapes
     private var inputSize   = 300
     private var numAnchors  = 0
     private var numClasses  = 0
     private var transposed  = false   // true → [1, 4+C, anchors]; false → [1, anchors, 4+C]
-    private var coordScale  = 1f     // fator para normalizar coords para [0,1]
+    private var coordScale  = 1f
 
-    // Para saber se precisa aplicar sigmoid (logits) ou usar score direto
     private var applySignoid = true
 
     var ultimoErro: String? = null
@@ -82,7 +81,7 @@ class ObjectDetectorHelper(
             inputSize = inShape[1]  // [1, H, W, 3]
 
             when {
-                // [1, 4+C, anchors] — transposto (YOLOv8/v11 padrão)
+                // [1, 4+C, anchors] — transposto (YOLOv8/v11 padrao)
                 outShape.size == 3 && outShape[1] in 5..300 && outShape[2] > outShape[1] -> {
                     transposed  = true
                     numClasses  = outShape[1] - 4
@@ -95,22 +94,17 @@ class ObjectDetectorHelper(
                     numClasses  = outShape[2] - 4
                 }
                 else -> {
-                    // Formato desconhecido — tenta inferir
                     transposed  = false
                     numAnchors  = if (outShape.size >= 2) outShape[1] else 0
                     numClasses  = if (outShape.size >= 3) outShape[2] - 4 else 0
-                    Log.w("Detector", "Formato de output não reconhecido: ${outShape.toList()}, tentando mesmo assim")
+                    Log.w("Detector", "Formato de output nao reconhecido: ${outShape.toList()}")
                 }
             }
 
-            // Escala de coordenadas: verifica se são normalizadas [0,1] ou em pixels [0,inputSize]
-            // Heurística: se o modelo for YOLOv8 exportado para TFLite, coords já são [0,1]
-            // Se for outro formato, pode estar em pixels — detectamos na primeira inferência
-            coordScale = 1f  // assume normalizado; ajustamos se detectar valores > 2.0
-
+            coordScale = 1f
             loadedPath = file.absolutePath
             ultimoErro = null
-            Log.d("Detector", "✓ Modelo carregado — size=$inputSize anchors=$numAnchors classes=$numClasses transposto=$transposed")
+            Log.d("Detector", "Modelo carregado — size=$inputSize anchors=$numAnchors classes=$numClasses transposto=$transposed")
 
         } catch (e: Exception) {
             ultimoErro = "Erro ao carregar modelo: ${e.message?.take(200)}"
@@ -137,7 +131,7 @@ class ObjectDetectorHelper(
                 buf.putFloat((px          and 0xFF) / 255f)
             }
 
-            // 2. Roda inferência
+            // 2. Roda inferencia
             @Suppress("UNCHECKED_CAST")
             val out = if (transposed)
                 Array(1) { Array(4 + numClasses) { FloatArray(numAnchors) } } as Array<Array<FloatArray>>
@@ -145,21 +139,19 @@ class ObjectDetectorHelper(
                 Array(1) { Array(numAnchors) { FloatArray(4 + numClasses) } } as Array<Array<FloatArray>>
             interp.run(buf, out)
 
-            // 3. Inspeciona primeiro anchor para calibrar coordScale
+            // 3. Calibra coordScale
             val sampleCoord = if (transposed) out[0][0][0] else out[0][0][0]
             if (coordScale == 1f && sampleCoord > 2f) {
-                // Coordenadas em pixels — normaliza dividindo pelo inputSize
                 coordScale = 1f / inputSize.toFloat()
                 Log.d("Detector", "Coordenadas em pixels detectadas, coordScale=$coordScale")
             }
 
-            // 4. Inspeciona primeiro score para calibrar sigmoid
+            // 4. Calibra sigmoid
             val sampleScore = if (transposed) out[0][4][0] else out[0][0][4]
-            // Se score já está entre 0 e 1, não aplica sigmoid
             applySignoid = sampleScore < 0f || sampleScore > 1f
 
             // 5. Decodifica anchors
-            val candidates = mutableListOf<FloatArray>() // [cx,cy,w,h, prob]
+            val candidates = mutableListOf<FloatArray>()
             var maxScore = -Float.MAX_VALUE
 
             for (i in 0 until numAnchors) {
@@ -187,7 +179,6 @@ class ObjectDetectorHelper(
                 val prob = if (applySignoid) sigmoid(rawScore) else rawScore.coerceIn(0f, 1f)
                 if (prob > maxScore) maxScore = prob
 
-                // Filtra: score acima do threshold E box com tamanho razoável (1%–100% da imagem)
                 if (prob >= scoreThreshold
                     && w  > 0.01f && h  > 0.01f
                     && w  < 1.5f  && h  < 1.5f
@@ -199,7 +190,7 @@ class ObjectDetectorHelper(
 
             Log.d("Detector", "maxScore=${"%.3f".format(maxScore)} threshold=$scoreThreshold candidatos=${candidates.size} sigmoid=$applySignoid scale=$coordScale")
 
-            // 6. NMS + conversão
+            // 6. NMS + conversao para DetectionResult proprio
             val imgW = image.width.toFloat()
             val imgH = image.height.toFloat()
             val detections = nms(candidates).take(maxResults).map { box ->
@@ -207,15 +198,17 @@ class ObjectDetectorHelper(
                 val top    = ((box[1] - box[3] / 2f) * imgH).coerceIn(0f, imgH)
                 val right  = ((box[0] + box[2] / 2f) * imgW).coerceIn(0f, imgW)
                 val bottom = ((box[1] + box[3] / 2f) * imgH).coerceIn(0f, imgH)
-                Detection.create(RectF(left, top, right, bottom),
-                    listOf(Category.create("cacau", "cacau", box[4])))
+                DetectionResult.create(
+                    RectF(left, top, right, bottom),
+                    listOf(DetectionCategory.create("cacau", "cacau", box[4]))
+                )
             }
 
-            Log.d("Detector", "Detecções finais: ${detections.size}")
+            Log.d("Detector", "Deteccoes finais: ${detections.size}")
             detectorListener?.onResults(detections)
 
         } catch (e: Exception) {
-            Log.e("Detector", "Erro na detecção: ${e.message}")
+            Log.e("Detector", "Erro na deteccao: ${e.message}")
             detectorListener?.onResults(emptyList())
         }
     }
@@ -249,11 +242,11 @@ class ObjectDetectorHelper(
                 }
             }
         } catch (e: Exception) {
-            ultimoErro = "Modelo '${s.fileName}' não encontrado nos assets."
+            ultimoErro = "Modelo '${s.fileName}' nao encontrado nos assets."
             detectorListener?.onError(ultimoErro!!); null
         }
         is ModelSource.InternalFile -> File(s.path).takeIf { it.exists() } ?: run {
-            ultimoErro = "Arquivo do modelo não encontrado. Importe novamente."
+            ultimoErro = "Arquivo do modelo nao encontrado. Importe novamente."
             detectorListener?.onError(ultimoErro!!); null
         }
         is ModelSource.External -> try {
@@ -263,7 +256,7 @@ class ObjectDetectorHelper(
                 }
             }
         } catch (e: Exception) {
-            ultimoErro = "Não foi possível acessar o arquivo. Selecione novamente."
+            ultimoErro = "Nao foi possivel acessar o arquivo. Selecione novamente."
             detectorListener?.onError(ultimoErro!!); null
         }
     }
@@ -272,7 +265,7 @@ class ObjectDetectorHelper(
     private fun close() { interpreter?.close(); interpreter = null; loadedPath = null }
 
     interface DetectorListener {
-        fun onResults(results: List<Detection>)
+        fun onResults(results: List<DetectionResult>)
         fun onError(mensagem: String) {}
     }
 }

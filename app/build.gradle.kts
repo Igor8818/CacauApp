@@ -43,12 +43,10 @@ android {
 
 dependencies {
     // ── TFLite ──────────────────────────────────────────────────────────────
-    // task-vision: mantido APENAS para o tipo Detection — não usamos ObjectDetector.
-    // Excluímos o manifest da task-vision para evitar conflitos com compileSdk 35.
-    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4") {
-        // Evita que o AndroidManifest da lib sobrescreva atributos do nosso app
-        exclude(group = "com.google.android.gms", module = "play-services-basement")
-    }
+    // NOTA: tensorflow-lite-task-vision foi REMOVIDO intencionalmente.
+    // Essa lib de 2022 declara targetSdk<4 em seu AndroidManifest, o que quebra
+    // o manifest merger com AGP 9 / compileSdk 35. Os tipos Detection e Category
+    // foram substituídos por data classes próprias em DetectionResult.kt.
     // Interpreter direto para inferência YOLO raw
     implementation("org.tensorflow:tensorflow-lite:2.16.1") {
         exclude(group = "org.tensorflow", module = "tensorflow-lite-support-api")
