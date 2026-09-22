@@ -421,16 +421,18 @@ fun TelaPrincipalCapturaOtimizada(
             val contagemFrutos = listaFiltrada.size
 
             Canvas(Modifier.fillMaxSize()) {
+                val imgW = detectorHelper.lastBitmapWidth.coerceAtLeast(1f)
+                val imgH = detectorHelper.lastBitmapHeight.coerceAtLeast(1f)
+                val scale = maxOf(size.width / imgW, size.height / imgH)
+                val offsetX = (size.width - imgW * scale) / 2f
+                val offsetY = (size.height - imgH * scale) / 2f
+
                 listaFiltrada.forEach { det ->
                     val rect = det.boundingBox
-                    // Coordenadas já em pixels do bitmap original — normaliza pelo bitmap
-                    // e projeta no canvas. imgRef = tamanho que o helper usou (yoloInputSize).
-                    val scaleX = size.width  / detectorHelper.lastBitmapWidth.coerceAtLeast(1f)
-                    val scaleY = size.height / detectorHelper.lastBitmapHeight.coerceAtLeast(1f)
                     drawRect(
                         color = Color.Green,
-                        topLeft = androidx.compose.ui.geometry.Offset(rect.left * scaleX, rect.top * scaleY),
-                        size = androidx.compose.ui.geometry.Size(rect.width() * scaleX, rect.height() * scaleY),
+                        topLeft = androidx.compose.ui.geometry.Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
+                        size = androidx.compose.ui.geometry.Size(rect.width() * scale, rect.height() * scale),
                         style = Stroke(width = 3.dp.toPx())
                     )
                 }
@@ -606,13 +608,17 @@ fun TelaModoFieldBook(
                 val contagemFrutos = listaFiltrada.size
 
                 Canvas(Modifier.fillMaxSize()) {
+                    val imgW = detectorHelper.lastBitmapWidth.coerceAtLeast(1f)
+                    val imgH = detectorHelper.lastBitmapHeight.coerceAtLeast(1f)
+                    val scale = maxOf(size.width / imgW, size.height / imgH)
+                    val offsetX = (size.width - imgW * scale) / 2f
+                    val offsetY = (size.height - imgH * scale) / 2f
+
                     listaFiltrada.forEach { det ->
                         val rect = det.boundingBox
-                        val scaleX = size.width  / detectorHelper.lastBitmapWidth.coerceAtLeast(1f)
-                        val scaleY = size.height / detectorHelper.lastBitmapHeight.coerceAtLeast(1f)
                         drawRect(color = Color.Green,
-                            topLeft = androidx.compose.ui.geometry.Offset(rect.left * scaleX, rect.top * scaleY),
-                            size = androidx.compose.ui.geometry.Size(rect.width() * scaleX, rect.height() * scaleY),
+                            topLeft = androidx.compose.ui.geometry.Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
+                            size = androidx.compose.ui.geometry.Size(rect.width() * scale, rect.height() * scale),
                             style = Stroke(width = 3.dp.toPx()))
                     }
                 }
@@ -781,7 +787,7 @@ fun criarDetectorHelper(
     return ObjectDetectorHelper(
         context          = context,
         detectorListener = object : ObjectDetectorHelper.DetectorListener {
-            override fun onResults(results: List<Detection>) { onResults(results) }
+            override fun onResults(results: List<DetectionResult>) { onResults(results) }
         },
         modelSource      = source,
         scoreThreshold   = config.threshold,

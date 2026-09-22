@@ -8,13 +8,16 @@ android {
         noCompress("tflite")
     }
     namespace = "com.example.myapplication"
-    // compileSdk 35 = Android 15 (estável). API 36 ainda é preview e quebra
-    // o manifest merger com dependências que declaram atributos legados.
-    compileSdk = 35
+    // compileSdk 36 exigido pelas dependencias activity:1.12.3, core:1.17.0 e compose-bom 2025.05
+    // O problema anterior de manifest merger foi causado pelo task-vision (ja removido).
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.myapplication"
         minSdk = 24
+        // targetSdk pode ser diferente do compileSdk:
+        // compileSdk=36 = podemos USAR simbolos da API 36
+        // targetSdk=35  = comportamento de runtime permanece no Android 15
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
