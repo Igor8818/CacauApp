@@ -1,4 +1,4 @@
-﻿package com.example.myapplication.userinterface.util
+package com.example.myapplication.userinterface.util
 
 import android.content.ContentValues
 import android.content.Context
@@ -48,7 +48,7 @@ fun CameraWithAI(
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(view.surfaceProvider) }
 
             val analyzer = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build().also { analysis ->
                     analysis.setAnalyzer(inferenceExecutor) { proxy ->
