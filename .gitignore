@@ -19,5 +19,7 @@ local.properties
 **/*.tflite
 modelopronto/
 /modelopronto/
+modeloia/
+/modeloia/
 app/src/main/assets/*.tflite
 /app/src/main/assets/*.tflite
