@@ -242,18 +242,30 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
-                    NavigationBar(containerColor = Color.White) {
+                    val navItemColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color(0xFF1B5E20),
+                        selectedTextColor = Color(0xFF1B5E20),
+                        indicatorColor = Color(0xFFE8F5E9),
+                        unselectedIconColor = Color(0xFF6D4C41),
+                        unselectedTextColor = Color(0xFF6D4C41)
+                    )
+                    NavigationBar(
+                        containerColor = Color(0xFFFAF7F2),
+                        tonalElevation = 8.dp
+                    ) {
                         NavigationBarItem(
                             selected = abaSelecionada == 0,
                             onClick = { abaSelecionada = 0 },
                             icon = { Icon(Icons.Default.PhotoCamera, null) },
-                            label = { Text("Coleta Livre") }
+                            label = { Text("Coleta Livre", fontWeight = if (abaSelecionada == 0) FontWeight.Bold else FontWeight.Normal) },
+                            colors = navItemColors
                         )
                         NavigationBarItem(
                             selected = abaSelecionada == 1,
                             onClick = { abaSelecionada = 1 },
                             icon = { Icon(Icons.Default.Route, null) },
-                            label = { Text("Modo Rota") }
+                            label = { Text("Modo Rota", fontWeight = if (abaSelecionada == 1) FontWeight.Bold else FontWeight.Normal) },
+                            colors = navItemColors
                         )
                         NavigationBarItem(
                             selected = abaSelecionada == 2,
@@ -261,25 +273,28 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             icon = {
                                 BadgedBox(badge = {
                                     if (listaRegistros.isNotEmpty()) {
-                                        Badge { Text("${listaRegistros.size}") }
+                                        Badge(containerColor = Color(0xFF2E7D32)) { Text("${listaRegistros.size}") }
                                     }
                                 }) {
                                     Icon(Icons.Default.Collections, null)
                                 }
                             },
-                            label = { Text("Galeria") }
+                            label = { Text("Galeria", fontWeight = if (abaSelecionada == 2) FontWeight.Bold else FontWeight.Normal) },
+                            colors = navItemColors
                         )
                         NavigationBarItem(
                             selected = false,
                             onClick = { mostrarTelaModelo = true },
                             icon = { Icon(Icons.Default.SmartToy, null) },
-                            label = { Text("Modelo IA") }
+                            label = { Text("Modelo IA") },
+                            colors = navItemColors
                         )
                         NavigationBarItem(
                             selected = false,
                             onClick = { mostrarTelaDiagnostico = true },
                             icon = { Icon(Icons.Default.Info, null) },
-                            label = { Text("Diagnóstico") }
+                            label = { Text("Diagnóstico") },
+                            colors = navItemColors
                         )
                     }
                 }

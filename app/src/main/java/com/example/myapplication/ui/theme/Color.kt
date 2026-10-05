@@ -2,10 +2,23 @@ package com.example.myapplication.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Paleta Oficial CacauApp CEPEC
+val CacauGreenPrimary    = Color(0xFF2E7D32)
+val CacauGreenDark       = Color(0xFF1B5E20)
+val CacauGreenLight      = Color(0xFF4CAF50)
+val CacauGreenContainer  = Color(0xFFE8F5E9)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+val CacauBrownDark       = Color(0xFF2D1B13)
+val CacauBrownMedium     = Color(0xFF4E342E)
+val CacauBrownLight      = Color(0xFF6D4C41)
+val CacauBrownContainer  = Color(0xFFEFEBE9)
+
+val CacauAmberAccent     = Color(0xFFFFA000)
+val CacauAmberLight      = Color(0xFFFFD54F)
+
+val CacauBackgroundLight = Color(0xFFFCFBF9)
+val CacauSurfaceLight    = Color(0xFFFFFFFF)
+val CacauCardLight       = Color(0xFFF7F4F0)
+val CacauTextPrimary     = Color(0xFF1C1917)
+val CacauTextSecondary   = Color(0xFF5D544F)
+val CacauBorderLight     = Color(0xFFE7E0D8)
