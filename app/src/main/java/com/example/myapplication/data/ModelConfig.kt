@@ -1,4 +1,4 @@
-﻿package com.example.myapplication.data
+package com.example.myapplication.data
 
 import android.net.Uri
 
@@ -27,12 +27,25 @@ data class ModelConfig(
         modeloExternoUri != null  -> modeloExternoNome.ifBlank { "Modelo Externo" }
         else                      -> "Nenhum modelo"
     }
+
+    /** Nome do arquivo .tflite em uso (ex: "detector.tflite") — exibido no badge da camera. */
+    val nomeArquivoModelo: String get() = when {
+        modeloSelecionado != null -> modeloSelecionado.nomeArquivo
+        modeloExternoUri != null  -> modeloExternoNome.ifBlank { "modelo_externo.tflite" }
+        else                      -> "sem modelo"
+    }
+
+    /** True quando ha alguma fonte de modelo configurada (nao garante que o arquivo exista). */
+    val temFonteDeModelo: Boolean get() = modeloSelecionado != null || modeloExternoUri != null
 }
 
 /**
  * Catalogo de modelos embutidos no APK.
- * Para adicionar um novo modelo: coloque o .tflite em app/src/main/assets/
- * e adicione uma entrada aqui.
+ *
+ * Contem apenas o modelo padrao do CEPEC. O arquivo .tflite NAO e versionado
+ * (propriedade intelectual) — se ausente de app/src/main/assets/, o app
+ * direciona o usuario para a tela "Configurar Modelo IA" para importar um
+ * arquivo externo. Qualquer outro modelo deve ser importado dinamicamente.
  */
 val MODELOS_EMBUTIDOS = listOf(
     ModelEmbutido(

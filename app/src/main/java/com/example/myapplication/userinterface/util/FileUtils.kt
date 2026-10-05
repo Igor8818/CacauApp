@@ -1,4 +1,4 @@
-﻿package com.example.myapplication.userinterface.util
+package com.example.myapplication.userinterface.util
 
 import android.content.ContentValues
 import android.content.Context
@@ -75,7 +75,9 @@ fun processarCSVComIndices(
 /**
  * Exporta os [registros] como planilha CSV compativel com Excel (UTF-8 + BOM)
  * para a pasta Downloads/CEPEC do dispositivo.
- * O nome do arquivo inclui o nome do ensaio e a data atual para facil identificacao.
+ *
+ * Nome do arquivo: `Coleta_{NomeDaCampanha}_{yyyy-MM-dd_HH-mm}.csv`.
+ * Letras acentuadas do nome da campanha sao preservadas (ver [limparSimbologiaPura]).
  */
 fun exportarPlanilhaCEPEC(
     context: Context,
@@ -85,9 +87,9 @@ fun exportarPlanilhaCEPEC(
     labelColuna2: String,
     labelColuna3: String
 ) {
-    val dataHoje   = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-    val nomeEnsaio = ensaio.ifBlank { "SemNome" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-    val nomeFinal  = "Coleta_${nomeEnsaio}_${dataHoje}.csv"
+    val dataHora   = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())
+    val nomeEnsaio = limparSimbologiaPura(ensaio).ifBlank { "SemNome" }
+    val nomeFinal  = "Coleta_${nomeEnsaio}_${dataHora}.csv"
 
     val contentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, nomeFinal)
@@ -110,7 +112,10 @@ fun exportarPlanilhaCEPEC(
                 out.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
                 BufferedWriter(OutputStreamWriter(out, StandardCharsets.UTF_8)).use { writer ->
                     // Cabecalho
-                    writer.write("Campanha,ID_Gerado,$labelColuna1,$labelColuna2,$labelColuna3,Resultado_IA,Data,Lat,Lng")
+                    writer.write(
+                        "Campanha,ID_Gerado,${escaparCampoCsv(labelColuna1)},${escaparCampoCsv(labelColuna2)}," +
+                        "${escaparCampoCsv(labelColuna3)},Resultado_IA,Data,Lat,Lng"
+                    )
                     writer.newLine()
                     // Linhas de dados
                     registros.forEach { reg ->
@@ -140,6 +145,18 @@ fun exportarPlanilhaCEPEC(
 }
 
 // ── Utilitarios internos ─────────────────────────────────────────────────────
+
+/**
+ * Sanitiza texto livre (nome de campanha, clone, parcela, fazenda, operador) para uso
+ * em nomes de arquivo, removendo simbolos e substituindo-os por `_`.
+ *
+ * Preserva: a-z, A-Z, 0-9, `_`, `-` e letras latinas estendidas (`\u00C0-\u024F`),
+ * ou seja, ã, ç, é, ó, ü etc. permanecem intactos.
+ */
+fun limparSimbologiaPura(texto: String): String =
+    texto.trim()
+        .replace(Regex("[^a-zA-Z0-9_\\-\\u00C0-\\u024F]+"), "_")
+        .trim('_')
 
 /**
  * Remove BOM UTF-8 e caracteres de controle indesejados, preservando
@@ -176,3 +193,30 @@ private fun escaparCampoCsv(valor: String): String {
         "\"${valor.replace("\"", "\"\"")}\""
     } else valor
 }
+
+/**
+ * Importa um modelo .tflite escolhido pelo usuario (SAF/GetContent) copiando-o para o
+ * armazenamento interno do app (`filesDir/modelo_externo.tflite`).
+ *
+ * A copia evita perder o acesso quando a permissao temporaria da URI original expira
+ * (ex.: app reiniciado). Retorna (Uri do arquivo interno, nome original) ou `null` em falha.
+ */
+fun importarModeloExterno(context: Context, uri: Uri): Pair<Uri, String>? {
+    val nome = nomeDoArquivo(context, uri) ?: "modelo_externo.tflite"
+    return try {
+        val destino = java.io.File(context.filesDir, "modelo_externo.tflite")
+        val entrada = context.contentResolver.openInputStream(uri) ?: return null
+        entrada.use { i -> java.io.FileOutputStream(destino).use { o -> i.copyTo(o) } }
+        if (destino.length() == 0L) null else Pair(Uri.fromFile(destino), nome)
+    } catch (e: Exception) {
+        Log.e("FileUtils", "Erro ao importar modelo: ${e.message}")
+        null
+    }
+}
+
+/** Nome de exibicao de uma URI de conteudo (coluna OpenableColumns.DISPLAY_NAME). */
+private fun nomeDoArquivo(context: Context, uri: Uri): String? = try {
+    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
+    } ?: uri.lastPathSegment?.substringAfterLast('/')
+} catch (_: Exception) { uri.lastPathSegment?.substringAfterLast('/') }

@@ -34,6 +34,7 @@ import coil.compose.AsyncImage
 import com.google.android.gms.location.*
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
@@ -95,17 +96,22 @@ fun AppCacauCEPEC() {
     var uriArquivoPendente by remember { mutableStateOf<Uri?>(null) }
     var temDadosAnteriores by remember { mutableStateOf(false) }
 
-    // ── CONFIGURAÇÃO DE MODELO (nova) ──
+    // ── CONFIGURAÇÃO DE MODELO ──
+    // O .tflite embutido NÃO é versionado no Git: só pré-seleciona o modelo padrão se o
+    // arquivo realmente existir nos assets. Caso contrário o app inicia SEM modelo e
+    // direciona o usuário para "Configurar Modelo IA" (sem crash).
     var modelConfig by remember {
+        val modeloPadrao = MODELOS_EMBUTIDOS.firstOrNull { assetModeloExiste(context, it.nomeArquivo) }
         mutableStateOf(
             ModelConfig(
-                modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull(),
-                labelsFiltro = MODELOS_EMBUTIDOS.firstOrNull()?.labelsDefault ?: listOf("cacau"),
+                modeloSelecionado = modeloPadrao,
+                labelsFiltro = modeloPadrao?.labelsDefault ?: listOf("cacau", "fruto"),
                 threshold = 0.5f,
                 maxResultados = 10
             )
         )
     }
+    var avisoModeloExibido by rememberSaveable { mutableStateOf(false) }
 
     val launcherArquivoCSV = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
@@ -152,6 +158,15 @@ fun AppCacauCEPEC() {
 
     LaunchedEffect(Unit) {
         launcherPermissoes.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
+    }
+
+    // Sem modelo utilizável → leva o usuário (uma vez) à tela de configuração do modelo.
+    LaunchedEffect(configConcluida) {
+        if (configConcluida && !avisoModeloExibido && !modeloDisponivel(context, modelConfig)) {
+            avisoModeloExibido = true
+            Toast.makeText(context, "Nenhum modelo de IA encontrado. Importe um arquivo .tflite.", Toast.LENGTH_LONG).show()
+            mostrarTelaModelo = true
+        }
     }
 
     // ── ROTEAMENTO DE TELAS ──
@@ -221,6 +236,7 @@ fun AppCacauCEPEC() {
                             plantaNum = valorNumVariavel3, onPlantaNumChange = { valorNumVariavel3 = it },
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { valorTxtVariavel3 = it },
                             modelConfig = modelConfig,
+                            onAbrirModelo = { mostrarTelaModelo = true },
                             onSave = { uri, contagemIA ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
                                 val idCompleto = "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}"
@@ -234,6 +250,7 @@ fun AppCacauCEPEC() {
                             ensaio = ensaioNome,
                             rotaCompleta = rotaPreCarregada,
                             modelConfig = modelConfig,
+                            onAbrirModelo = { mostrarTelaModelo = true },
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { rotaPreCarregada.clear() },
                             onSaveColetaRota = { uri, ponto, contagemIA ->
@@ -310,6 +327,7 @@ fun TelaPrincipalCapturaOtimizada(
     plantaNum: Int, onPlantaNumChange: (Int) -> Unit,
     plantaTxt: String, onPlantaTxtChange: (String) -> Unit,
     modelConfig: ModelConfig,
+    onAbrirModelo: () -> Unit,
     onSave: (Uri, String) -> Unit
 ) {
     val context = LocalContext.current
@@ -320,15 +338,16 @@ fun TelaPrincipalCapturaOtimizada(
 
     val imageCapture = remember { ImageCapture.Builder().build() }
 
+    // null quando nao ha modelo utilizavel -> UI direciona para "Configurar Modelo IA"
     val detectorHelper = remember(modelConfig) {
-        criarDetectorHelper(context, modelConfig) { deteccoesAtuais = it }
+        buildDetectorHelper(context, modelConfig) { deteccoesAtuais = it }
     }
 
     val isCloneValido = cloneVal.isNotBlank() &&
             (if (isNum2) true else parcelaTxt.isNotBlank()) &&
             (if (isNum3) true else plantaTxt.isNotBlank())
 
-    if (!cameraAtiva) {
+    if (!cameraAtiva || detectorHelper == null) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Sessão Manual: $ensaio", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
@@ -353,6 +372,11 @@ fun TelaPrincipalCapturaOtimizada(
                 }
             }
 
+            if (detectorHelper == null) {
+                Spacer(Modifier.height(8.dp))
+                AvisoModeloAusente(modelConfig.nomeExibicao, onAbrirModelo)
+            }
+
             Spacer(Modifier.height(16.dp))
 
             ExposedDropdownMenuBox(expanded = menuClonesExpandido, onExpandedChange = { menuClonesExpandido = !menuClonesExpandido }) {
@@ -375,10 +399,11 @@ fun TelaPrincipalCapturaOtimizada(
 
             if (isNum2) {
                 Text(label2, fontSize = 12.sp, color = Color.Gray)
+                // Botões - 1 + grandes (80dp) para uso sob sol e com uma só mão
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = { if (parcelaNum > 1) onParcelaNumChange(parcelaNum - 1) }) { Icon(Icons.Default.RemoveCircle, null, tint = Color.Red, modifier = Modifier.size(40.dp)) }
-                    Text("$parcelaNum", fontSize = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 24.dp))
-                    IconButton(onClick = { onParcelaNumChange(parcelaNum + 1) }) { Icon(Icons.Default.AddCircle, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(40.dp)) }
+                    IconButton(onClick = { if (parcelaNum > 1) onParcelaNumChange(parcelaNum - 1) }, modifier = Modifier.size(80.dp)) { Icon(Icons.Default.RemoveCircle, "Diminuir $label2", tint = Color.Red, modifier = Modifier.size(64.dp)) }
+                    Text("$parcelaNum", fontSize = 40.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp))
+                    IconButton(onClick = { onParcelaNumChange(parcelaNum + 1) }, modifier = Modifier.size(80.dp)) { Icon(Icons.Default.AddCircle, "Aumentar $label2", tint = Color(0xFF2E7D32), modifier = Modifier.size(64.dp)) }
                 }
             } else {
                 OutlinedTextField(value = parcelaTxt, onValueChange = onParcelaTxtChange, label = { Text(label2) }, modifier = Modifier.fillMaxWidth(), leadingIcon = { Icon(Icons.Default.Layers, null, tint = Color(0xFF2E7D32)) })
@@ -401,11 +426,11 @@ fun TelaPrincipalCapturaOtimizada(
 
             Spacer(Modifier.weight(1f))
 
-            OutlinedButton(onClick = { onSave(Uri.EMPTY, "Não Coletável") }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
+            OutlinedButton(onClick = { onSave(Uri.EMPTY, "Não Coletável") }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).height(56.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                 Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA NÃO COLETÁVEL")
             }
-            Button(onClick = { cameraAtiva = true }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(64.dp), shape = RoundedCornerShape(12.dp)) {
-                Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("ABRIR CÂMERA")
+            Button(onClick = { cameraAtiva = true }, enabled = isCloneValido && detectorHelper != null, modifier = Modifier.fillMaxWidth().height(72.dp), shape = RoundedCornerShape(12.dp)) {
+                Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("ABRIR CÂMERA", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
     } else {
@@ -441,7 +466,8 @@ fun TelaPrincipalCapturaOtimizada(
             Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Detectados: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(modelConfig.nomeExibicao, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    // Badge: arquivo do modelo · limiar de confiança (ex.: detector.tflite · 60%)
+                    Text("${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}%", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
 
@@ -461,8 +487,8 @@ fun TelaPrincipalCapturaOtimizada(
                 icon = { Icon(Icons.Default.Save, null) }
             )
 
-            IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
-                Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(32.dp))
+            IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(56.dp)) {
+                Icon(Icons.Default.Cancel, "Fechar câmera", tint = Color.White, modifier = Modifier.size(44.dp))
             }
         }
     }
@@ -513,6 +539,7 @@ fun TelaModoFieldBook(
     ensaio: String,
     rotaCompleta: List<RotaColeta>,
     modelConfig: ModelConfig,
+    onAbrirModelo: () -> Unit,
     onCarregarPlanilhaClick: () -> Unit,
     onLimparRotaClick: () -> Unit,
     onSaveColetaRota: (Uri, RotaColeta, String) -> Unit
@@ -523,8 +550,9 @@ fun TelaModoFieldBook(
     var deteccoesAtuais by remember { mutableStateOf<List<DetectionResult>>(emptyList()) }
     val imageCapture = remember { ImageCapture.Builder().build() }
 
+    // null quando não há modelo utilizável → UI direciona para "Configurar Modelo IA"
     val detectorHelper = remember(modelConfig) {
-        criarDetectorHelper(context, modelConfig) { deteccoesAtuais = it }
+        buildDetectorHelper(context, modelConfig) { deteccoesAtuais = it }
     }
 
     if (rotaCompleta.isEmpty()) {
@@ -542,7 +570,7 @@ fun TelaModoFieldBook(
         val pontoAtual = rotaCompleta[indiceAtual]
         val isPontoValido = pontoAtual.clone.isNotBlank()
 
-        if (!cameraAtiva) {
+        if (!cameraAtiva || detectorHelper == null) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Sessão em Rota: $ensaio", fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
@@ -557,8 +585,13 @@ fun TelaModoFieldBook(
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.SmartToy, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("${modelConfig.nomeExibicao} • ${(modelConfig.threshold * 100).toInt()}% conf.", fontSize = 12.sp, color = Color(0xFF2E7D32))
+                        Text("${modelConfig.nomeExibicao} • ${(modelConfig.threshold * 100).roundToInt()}% conf.", fontSize = 12.sp, color = Color(0xFF2E7D32))
                     }
+                }
+
+                if (detectorHelper == null) {
+                    Spacer(Modifier.height(8.dp))
+                    AvisoModeloAusente(modelConfig.nomeExibicao, onAbrirModelo)
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -583,16 +616,19 @@ fun TelaModoFieldBook(
 
                 Spacer(Modifier.weight(1f))
 
-                OutlinedButton(onClick = { onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável"); pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
+                OutlinedButton(onClick = { onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável"); pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).height(56.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                     Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA MORTA / SECA / AUSENTE")
                 }
 
+                // Navegação Voltar/Avançar com alvos de toque de 72dp (uso sob sol / uma mão)
+                val podeVoltar = indiceAtual > 0
+                val podeAvancar = indiceAtual < rotaCompleta.size - 1
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { if (indiceAtual > 0) indiceAtual-- }, enabled = indiceAtual > 0) { Icon(Icons.Default.ArrowBackIos, null, modifier = Modifier.size(36.dp), tint = if (indiceAtual > 0) Color(0xFF2E7D32) else Color.Gray) }
-                    Button(onClick = { cameraAtiva = true }, enabled = isPontoValido, modifier = Modifier.height(56.dp).weight(1f).padding(horizontal = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
-                        Icon(Icons.Default.PhotoCamera, null); Text(if (pontoAtual.coletado) " REFAZER FOTO" else " ABRIR CÂMERA")
+                    IconButton(onClick = { if (podeVoltar) indiceAtual-- }, enabled = podeVoltar, modifier = Modifier.size(72.dp)) { Icon(Icons.Default.ArrowBackIos, "Planta anterior", modifier = Modifier.size(44.dp), tint = if (podeVoltar) Color(0xFF2E7D32) else Color.Gray) }
+                    Button(onClick = { cameraAtiva = true }, enabled = isPontoValido && detectorHelper != null, modifier = Modifier.height(72.dp).weight(1f).padding(horizontal = 8.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
+                        Icon(Icons.Default.PhotoCamera, null); Text(if (pontoAtual.coletado) " REFAZER FOTO" else " ABRIR CÂMERA", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
-                    IconButton(onClick = { if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = indiceAtual < rotaCompleta.size - 1) { Icon(Icons.Default.ArrowForwardIos, null, modifier = Modifier.size(36.dp), tint = if (indiceAtual < rotaCompleta.size - 1) Color(0xFF2E7D32) else Color.Gray) }
+                    IconButton(onClick = { if (podeAvancar) indiceAtual++ }, enabled = podeAvancar, modifier = Modifier.size(72.dp)) { Icon(Icons.Default.ArrowForwardIos, "Próxima planta", modifier = Modifier.size(44.dp), tint = if (podeAvancar) Color(0xFF2E7D32) else Color.Gray) }
                 }
             }
         } else {
@@ -624,7 +660,11 @@ fun TelaModoFieldBook(
                 }
 
                 Surface(Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(16.dp), color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(16.dp)) {
-                    Text("${pontoAtual.clone} | Contagem: $contagemFrutos", color = Color.White, modifier = Modifier.padding(8.dp))
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("${pontoAtual.clone} | Contagem: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold)
+                        // Badge: arquivo do modelo · limiar de confiança (ex.: detector.tflite · 60%)
+                        Text("${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}%", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    }
                 }
 
                 ExtendedFloatingActionButton(
@@ -644,8 +684,8 @@ fun TelaModoFieldBook(
                     icon = { Icon(Icons.Default.Check, null) }
                 )
 
-                IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
-                    Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(32.dp))
+                IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(56.dp)) {
+                    Icon(Icons.Default.Cancel, "Fechar câmera", tint = Color.White, modifier = Modifier.size(44.dp))
                 }
             }
         }
@@ -703,23 +743,29 @@ fun TelaCheckInSimples(ensaio: String, onEnsaioChange: (String) -> Unit, exibirB
 fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: String, l3: String) {
     val context = LocalContext.current
 
-    // Totais calculados uma vez para exibicao no cabecalho
-    val totalPlantas = registros.size
-    val totalFrutos  = registros.sumOf { it.diagnostico.toIntOrNull() ?: 0 }
-    val naoColetaveis = registros.count { it.diagnostico == "Não Coletável" }
+    // Métricas consolidadas da campanha
+    val totalRegistros = registros.size
+    val totalFrutos    = registros.sumOf { it.diagnostico.toIntOrNull() ?: 0 }
+    val naoColetaveis  = registros.count { it.diagnostico == "Não Coletável" }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text("Registros: $ensaio", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text("$totalPlantas plantas • $totalFrutos frutos detectados", fontSize = 12.sp, color = Color(0xFF558B2F))
-                if (naoColetaveis > 0) Text("$naoColetaveis não coletáveis", fontSize = 11.sp, color = Color.Red)
-            }
+            Text("Campanha: $ensaio", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
             IconButton(
-                onClick = { exportarPlanilhaCEPEC(context, registros, ensaio, l1, l2, l3) }
+                onClick = { exportarPlanilhaCEPEC(context, registros, ensaio, l1, l2, l3) },
+                modifier = Modifier.size(56.dp)
             ) {
-                Icon(Icons.Default.FileDownload, contentDescription = "Exportar CSV", tint = Color(0xFF2E7D32))
+                Icon(Icons.Default.FileDownload, contentDescription = "Exportar CSV", tint = Color(0xFF2E7D32), modifier = Modifier.size(32.dp))
             }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CartaoMetrica(Modifier.weight(1f), Icons.Default.PhotoCamera, "$totalRegistros", "Plantas registradas", Color(0xFF2E7D32))
+            CartaoMetrica(Modifier.weight(1f), Icons.Default.Eco, "$totalFrutos", "Frutos detectados", Color(0xFF1B5E20))
+        }
+        if (naoColetaveis > 0) {
+            Spacer(Modifier.height(6.dp))
+            Text("$naoColetaveis não coletável(is)", fontSize = 12.sp, color = Color(0xFFE65100))
         }
         Spacer(Modifier.height(12.dp))
         if (registros.isEmpty()) {
@@ -768,29 +814,57 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
 }
 
 // ════════════════════════════════════════════════════
-// FACTORY: cria ObjectDetectorHelper a partir de ModelConfig
-// Elimina duplicacao entre TelaPrincipalCapturaOtimizada e TelaModoFieldBook
+// COMPONENTES AUXILIARES
+// (a factory do detector agora é buildDetectorHelper, em ObjectDetectorHelper.kt)
 // ════════════════════════════════════════════════════
-fun criarDetectorHelper(
-    context: android.content.Context,
-    config: ModelConfig,
-    onResults: (List<DetectionResult>) -> Unit
-): ObjectDetectorHelper {
-    val source = when {
-        config.modeloExternoUri != null ->
-            ObjectDetectorHelper.ModelSource.External(config.modeloExternoUri, config.modeloExternoNome)
-        config.modeloSelecionado != null ->
-            ObjectDetectorHelper.ModelSource.Asset(config.modeloSelecionado.nomeArquivo)
-        else ->
-            ObjectDetectorHelper.ModelSource.Asset("detector.tflite")
+
+/** Card de métrica consolidada (cabeçalho da Galeria). */
+@Composable
+private fun CartaoMetrica(
+    modifier: Modifier,
+    icone: androidx.compose.ui.graphics.vector.ImageVector,
+    valor: String,
+    rotulo: String,
+    cor: Color
+) {
+    Card(modifier = modifier, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icone, null, tint = cor, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(valor, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = cor)
+                Text(rotulo, fontSize = 11.sp, color = Color(0xFF558B2F))
+            }
+        }
     }
-    return ObjectDetectorHelper(
-        context          = context,
-        detectorListener = object : ObjectDetectorHelper.DetectorListener {
-            override fun onResults(results: List<DetectionResult>) { onResults(results) }
-        },
-        modelSource      = source,
-        scoreThreshold   = config.threshold,
-        maxResults       = config.maxResultados
-    )
+}
+
+/** Aviso exibido quando não há modelo .tflite utilizável; leva à tela de configuração. */
+@Composable
+private fun AvisoModeloAusente(nomeModelo: String, onAbrirModelo: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.ReportProblem, null, tint = Color(0xFFE65100))
+                Spacer(Modifier.width(8.dp))
+                Text("Modelo de IA indisponível", fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
+            }
+            Text(
+                "O modelo \"$nomeModelo\" não foi encontrado ou não pôde ser carregado. Importe um arquivo .tflite para habilitar a câmera.",
+                fontSize = 12.sp, color = Color.DarkGray
+            )
+            Button(
+                onClick = onAbrirModelo,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+            ) {
+                Icon(Icons.Default.SmartToy, null); Spacer(Modifier.width(8.dp)); Text("CONFIGURAR MODELO IA", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }

@@ -14,7 +14,10 @@
 .cxx
 local.properties
 
-# ── Modelos de IA (privados — não subir ao GitHub) ──
+# --- Modelos de IA (proprietarios CEPEC - NUNCA subir ao GitHub) ---
 *.tflite
+**/*.tflite
+modelopronto/
 /modelopronto/
-/app/src/main/assets/
+app/src/main/assets/*.tflite
+/app/src/main/assets/*.tflite
