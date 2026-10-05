@@ -1,3 +1,26 @@
 <resources>
     <string name="app_name">CacauApp CEPEC</string>
+    <string name="coleta_livre">Coleta Livre</string>
+    <string name="modo_rota">Modo Rota</string>
+    <string name="galeria">Galeria</string>
+    <string name="modelo_ia">Modelo IA</string>
+    <string name="ensaio">Ensaio</string>
+    <string name="salvar">Salvar</string>
+    <string name="cancelar">Cancelar</string>
+    <string name="confirmar">Confirmar</string>
+    <string name="excluir">Excluir</string>
+    <string name="desfazer">Desfazer</string>
+    <string name="registro_excluido">Registro excluído</string>
+    <string name="editar_contagem">Editar Contagem</string>
+    <string name="nova_contagem">Nova contagem de frutos:</string>
+    <string name="novo_ensaio_titulo">Iniciar Novo Ensaio?</string>
+    <string name="novo_ensaio_msg">Os registros atuais serão reiniciados para o novo ensaio. Deseja exportar a planilha atual antes de prosseguir?</string>
+    <string name="exportar_e_continuar">Exportar e Iniciar</string>
+    <string name="iniciar_sem_exportar">Iniciar Direto</string>
+    <string name="aviso_planta_duplicada">Atenção: A planta \"%1$s\" já foi registrada nesta sessão. O novo registro atualizará a contagem.</string>
+    <string name="permissao_necessaria_titulo">Permissões Necessárias</string>
+    <string name="permissao_necessaria_msg">O CacauApp precisa de acesso à Câmera e Localização GPS para realizar a contagem e georreferenciar os frutos no campo.</string>
+    <string name="abrir_configuracoes">Abrir Configurações</string>
+    <string name="gps_sem_sinal">Aguardando sinal GPS...</string>
+    <string name="gps_sinal_ok">GPS: ±%1$.1fm</string>
 </resources>
