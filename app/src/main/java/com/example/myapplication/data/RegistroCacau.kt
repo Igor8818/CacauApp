@@ -11,5 +11,15 @@ data class RegistroCacau(
     val data: String,
     val numPlanta: Int,
     val lat: Double,
-    val lng: Double
+    val lng: Double,
+    val contagemIa: Int = diagnostico.toIntOrNull() ?: 0,
+    val contagemFinal: Int = diagnostico.toIntOrNull() ?: 0,
+    val confiancaMedia: Float = 0f,
+    val modelo: String = "",
+    val threshold: Float = 0.55f,
+    val operador: String = "",
+    val fazenda: String = "",
+    val precisaoGpsM: Float = 0f,
+    val altitude: Double = 0.0,
+    val versaoApp: String = "1.0"
 )
