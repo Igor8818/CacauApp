@@ -1,4 +1,4 @@
-﻿package com.example.myapplication.userinterface.util
+package com.example.myapplication.userinterface.util
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import com.example.myapplication.data.DetectionCategory
 import com.example.myapplication.data.DetectionResult
+import com.example.myapplication.data.ModelConfig
 import org.tensorflow.lite.Interpreter
 import java.io.File
 import java.io.FileOutputStream
@@ -267,5 +268,72 @@ class ObjectDetectorHelper(
     interface DetectorListener {
         fun onResults(results: List<DetectionResult>)
         fun onError(mensagem: String) {}
+    }
+}
+
+// ════════════════════════════════════════════════════
+// FACTORY COMPARTILHADA (DRY)
+// Usada por TelaPrincipalCapturaOtimizada e TelaModoFieldBook.
+// ════════════════════════════════════════════════════
+
+/** Verifica se [nome] existe em assets/ sem carregar o conteudo. */
+fun assetModeloExiste(context: Context, nome: String): Boolean = try {
+    context.assets.open(nome).close(); true
+} catch (_: Exception) { false }
+
+/**
+ * Indica se [config] aponta para um modelo realmente utilizavel agora:
+ * - modelo externo: URI configurada;
+ * - modelo embutido: arquivo presente em assets/ (o .tflite nao e versionado no Git).
+ */
+fun modeloDisponivel(context: Context, config: ModelConfig): Boolean = when {
+    config.modeloExternoUri != null  -> true
+    config.modeloSelecionado != null -> assetModeloExiste(context, config.modeloSelecionado.nomeArquivo)
+    else                             -> false
+}
+
+/**
+ * Cria um [ObjectDetectorHelper] a partir de [config] de forma SEGURA.
+ *
+ * Retorna `null` (nunca lanca excecao) quando nao ha modelo disponivel ou o
+ * carregamento falha — a UI deve entao direcionar o usuario para
+ * "Configurar Modelo IA". O motivo da falha e reportado em [aoErro].
+ */
+fun buildDetectorHelper(
+    context: Context,
+    config: ModelConfig,
+    aoErro: (String) -> Unit = {},
+    aoDetectar: (List<DetectionResult>) -> Unit
+): ObjectDetectorHelper? {
+    if (!modeloDisponivel(context, config)) {
+        aoErro("Nenhum modelo de IA disponivel. Importe um arquivo .tflite.")
+        return null
+    }
+    return try {
+        val source = when {
+            config.modeloExternoUri != null ->
+                ObjectDetectorHelper.ModelSource.External(config.modeloExternoUri, config.modeloExternoNome)
+            else ->
+                ObjectDetectorHelper.ModelSource.Asset(config.modeloSelecionado!!.nomeArquivo)
+        }
+        val helper = ObjectDetectorHelper(
+            context          = context,
+            detectorListener = object : ObjectDetectorHelper.DetectorListener {
+                override fun onResults(results: List<DetectionResult>) { aoDetectar(results) }
+                override fun onError(mensagem: String) { aoErro(mensagem) }
+            },
+            modelSource      = source,
+            scoreThreshold   = config.threshold,
+            maxResults       = config.maxResultados
+        )
+        if (helper.ultimoErro != null) {
+            aoErro(helper.ultimoErro!!)
+            helper.fechar()
+            null
+        } else helper
+    } catch (t: Throwable) {   // inclui UnsatisfiedLinkError/OutOfMemoryError do TFLite
+        Log.e("Detector", "Falha ao criar detector: ${t.message}")
+        aoErro("Falha ao carregar o modelo: ${t.message?.take(120)}")
+        null
     }
 }

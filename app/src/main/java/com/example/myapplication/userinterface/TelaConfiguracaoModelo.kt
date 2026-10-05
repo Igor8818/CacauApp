@@ -26,6 +26,14 @@ import androidx.compose.ui.unit.sp
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.ModelEmbutido
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
+import com.example.myapplication.userinterface.util.assetModeloExiste
+import com.example.myapplication.userinterface.util.importarModeloExterno
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,19 +48,32 @@ fun TelaConfiguracaoModelo(
     var modeloExternoNome by remember { mutableStateOf(configAtual.modeloExternoNome) }
 
     var labelsTexto by remember { mutableStateOf(configAtual.labelsFiltro.joinToString(", ")) }
-    var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).toInt().toString()) }
+    var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).roundToInt().toString()) }
     var maxResultados by remember { mutableStateOf(configAtual.maxResultados) }
 
     var novoLabel by remember { mutableStateOf("") }
 
     val verde = Color(0xFF2E7D32)
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Somente modelos cujo arquivo realmente existe em assets/ (o .tflite nao e versionado)
+    val modelosDisponiveis = remember { MODELOS_EMBUTIDOS.filter { assetModeloExiste(context, it.nomeArquivo) } }
+
     val launcherModelo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
-            modeloExternoUri = it
-            modeloSelecionado = null // desseleciona embutido
-            // Tenta pegar o nome do arquivo
-            modeloExternoNome = it.lastPathSegment?.substringAfterLast("/") ?: "modelo_externo.tflite"
+            // Copia o arquivo para o armazenamento interno (a permissao da URI original e temporaria)
+            scope.launch {
+                val importado = withContext(Dispatchers.IO) { importarModeloExterno(context, it) }
+                if (importado != null) {
+                    modeloExternoUri = importado.first
+                    modeloExternoNome = importado.second
+                    modeloSelecionado = null // desseleciona embutido
+                } else {
+                    Toast.makeText(context, "Não foi possível importar o modelo. Tente novamente.", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -92,7 +113,27 @@ fun TelaConfiguracaoModelo(
                 SectionHeader(icon = Icons.Default.Memory, title = "Modelos Embutidos no App")
             }
 
-            items(MODELOS_EMBUTIDOS) { modelo ->
+            // Nenhum modelo embutido no build (o .tflite nao e versionado no Git)
+            if (modelosDisponiveis.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Nenhum modelo embutido neste build", fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
+                            Text(
+                                "O modelo do CEPEC é proprietário e não acompanha o repositório. " +
+                                    "Importe o arquivo .tflite na seção abaixo para ativar a detecção.",
+                                fontSize = 12.sp, color = Color.DarkGray
+                            )
+                        }
+                    }
+                }
+            }
+
+            items(modelosDisponiveis) { modelo ->
                 CartaoModeloEmbutido(
                     modelo = modelo,
                     selecionado = modeloSelecionado?.nomeArquivo == modelo.nomeArquivo &&
@@ -306,12 +347,12 @@ fun TelaConfiguracaoModelo(
                                 horizontalArrangement = Arrangement.Center,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                IconButton(onClick = { if (maxResultados > 1) maxResultados-- }) {
-                                    Icon(Icons.Default.RemoveCircle, null, tint = Color.Red, modifier = Modifier.size(36.dp))
+                                IconButton(onClick = { if (maxResultados > 1) maxResultados-- }, modifier = Modifier.size(64.dp)) {
+                                    Icon(Icons.Default.RemoveCircle, "Diminuir", tint = Color.Red, modifier = Modifier.size(48.dp))
                                 }
                                 Text("$maxResultados", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 24.dp))
-                                IconButton(onClick = { if (maxResultados < 50) maxResultados++ }) {
-                                    Icon(Icons.Default.AddCircle, null, tint = verde, modifier = Modifier.size(36.dp))
+                                IconButton(onClick = { if (maxResultados < 50) maxResultados++ }, modifier = Modifier.size(64.dp)) {
+                                    Icon(Icons.Default.AddCircle, "Aumentar", tint = verde, modifier = Modifier.size(48.dp))
                                 }
                             }
                         }
