@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +35,7 @@ import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +49,7 @@ fun TelaConfiguracaoModelo(
     var modeloSelecionado by remember { mutableStateOf(configAtual.modeloSelecionado) }
     var modeloExternoUri by remember { mutableStateOf(configAtual.modeloExternoUri) }
     var modeloExternoNome by remember { mutableStateOf(configAtual.modeloExternoNome) }
+    var detalhesModeloExterno by remember { mutableStateOf("") }
 
     var labelsTexto by remember { mutableStateOf(configAtual.labelsFiltro.joinToString(", ")) }
     var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).roundToInt().toString()) }
@@ -58,18 +62,35 @@ fun TelaConfiguracaoModelo(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Somente modelos cujo arquivo realmente existe em assets/ (o .tflite nao e versionado)
     val modelosDisponiveis = remember { MODELOS_EMBUTIDOS.filter { assetModeloExiste(context, it.nomeArquivo) } }
 
     val launcherModelo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
-            // Copia o arquivo para o armazenamento interno (a permissao da URI original e temporaria)
             scope.launch {
+                // Validação de assinatura TFL3 e hash SHA-256
+                val info = withContext(Dispatchers.IO) {
+                    try {
+                        val bytes = context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() }
+                        if (bytes != null && bytes.size >= 8) {
+                            val magic = String(bytes.sliceArray(4..7))
+                            val isTfl3 = magic == "TFL3" || magic.startsWith("TFL")
+                            val md = MessageDigest.getInstance("SHA-256").digest(bytes)
+                            val sha = md.take(6).joinToString("") { b -> "%02x".format(b) }
+                            val mb = "%.2f MB".format(bytes.size.toDouble() / (1024 * 1024))
+                            if (isTfl3) "Tamanho: $mb | SHA-256: $sha..." else "Aviso: assinatura TFL3 não encontrada ($mb)"
+                        } else "Arquivo inválido"
+                    } catch (e: Exception) {
+                        "Não foi possível inspecionar o arquivo"
+                    }
+                }
+                detalhesModeloExterno = info
+
                 val importado = withContext(Dispatchers.IO) { importarModeloExterno(context, it) }
                 if (importado != null) {
                     modeloExternoUri = importado.first
                     modeloExternoNome = importado.second
-                    modeloSelecionado = null // desseleciona embutido
+                    modeloSelecionado = null
+                    Toast.makeText(context, "Modelo importado com sucesso!", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Não foi possível importar o modelo. Tente novamente.", Toast.LENGTH_LONG).show()
                 }
@@ -77,7 +98,6 @@ fun TelaConfiguracaoModelo(
         }
     }
 
-    // Parse dos labels atuais como lista
     val listaLabels = remember(labelsTexto) {
         labelsTexto.split(",").map { it.trim() }.filter { it.isNotBlank() }
     }
@@ -88,7 +108,7 @@ fun TelaConfiguracaoModelo(
                 title = { Text("Configurar Modelo de IA", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onVoltar) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -175,6 +195,9 @@ fun TelaConfiguracaoModelo(
                                 Text("Modelo carregado:", fontSize = 12.sp, color = Color.Gray)
                             }
                             Text(modeloExternoNome, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            if (detalhesModeloExterno.isNotBlank()) {
+                                Text(detalhesModeloExterno, fontSize = 11.sp, color = Color.Gray)
+                            }
                             Text(
                                 "⚠️ Após importar, configure os rótulos abaixo manualmente.",
                                 fontSize = 12.sp,
@@ -202,7 +225,7 @@ fun TelaConfiguracaoModelo(
 
             // ── SEÇÃO 3: RÓTULOS (LABELS) ──
             item {
-                SectionHeader(icon = Icons.Default.Label, title = "Rótulos Detectados (Labels)")
+                SectionHeader(icon = Icons.AutoMirrored.Filled.Label, title = "Rótulos Detectados (Labels)")
             }
 
             item {
@@ -336,7 +359,7 @@ fun TelaConfiguracaoModelo(
                             }
                         }
 
-                        Divider()
+                        HorizontalDivider()
 
                         // Max resultados
                         Column {
