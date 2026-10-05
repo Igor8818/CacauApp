@@ -74,7 +74,7 @@ fun RevisaoCapturaScreen(
                     override fun onResults(results: List<DetectionResult>) {
                         val filtradas = results.filter { det ->
                             val score = det.categories.firstOrNull()?.score ?: 0f
-                            score >= modelConfig.threshold
+                            score >= (modelConfig.threshold - 0.02f)
                         }.map { it.boundingBox }
 
                         caixasDetectadas.clear()

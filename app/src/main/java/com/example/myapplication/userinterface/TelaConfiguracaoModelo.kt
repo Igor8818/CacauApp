@@ -389,7 +389,7 @@ fun TelaConfiguracaoModelo(
                 val podeSalvar = modeloSelecionado != null || modeloExternoUri != null
                 Button(
                     onClick = {
-                        val threshold = (thresholdTexto.toIntOrNull() ?: 50) / 100f
+                        val threshold = (thresholdTexto.toIntOrNull() ?: 30) / 100f
                         onSalvar(
                             ModelConfig(
                                 modeloSelecionado = modeloSelecionado,

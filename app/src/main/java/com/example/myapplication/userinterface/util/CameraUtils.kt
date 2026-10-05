@@ -48,20 +48,33 @@ fun CameraWithAI(
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { ctx ->
             val view = PreviewView(ctx).apply {
-                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                scaleType = PreviewView.ScaleType.FILL_CENTER
             }
 
             val inferenceRunning = AtomicBoolean(false)
             val lastInferenceMs = AtomicLong(0L)
-            val minIntervalMs = 600L // Taxa equilibrada para eficiência térmica em campo
+            val minIntervalMs = 300L // 3.3 FPS: fluido e termicamente eficiente
+
+            helper.setListener(object : ObjectDetectorHelper.DetectorListener {
+                override fun onResults(results: List<DetectionResult>) {
+                    onResultsUpdated(results)
+                }
+                override fun onError(mensagem: String) {
+                    Log.e("CameraAI", "Detector: $mensagem")
+                }
+            })
 
             providerFuture.addListener({
                 val provider = providerFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(view.surfaceProvider)
-                }
+                val preview = Preview.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .build().also {
+                        it.setSurfaceProvider(view.surfaceProvider)
+                    }
 
                 val analyzer = ImageAnalysis.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build().also { analysis ->
@@ -87,15 +100,6 @@ fun CameraWithAI(
                                 } else {
                                     rawBitmap
                                 }
-
-                                helper.setListener(object : ObjectDetectorHelper.DetectorListener {
-                                    override fun onResults(results: List<DetectionResult>) {
-                                        onResultsUpdated(results)
-                                    }
-                                    override fun onError(mensagem: String) {
-                                        Log.e("CameraAI", "Detector: $mensagem")
-                                    }
-                                })
 
                                 helper.detect(bitmapProcessado)
 

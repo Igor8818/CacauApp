@@ -198,8 +198,8 @@ class AppRepository(private val context: Context) {
     }
 
     fun carregarModelConfig(): ModelConfig {
-        val threshold = prefs.getFloat("threshold", 0.55f)
-        val maxRes = prefs.getInt("max_resultados", 10)
+        val threshold = prefs.getFloat("threshold", 0.30f)
+        val maxRes = prefs.getInt("max_resultados", 15)
         val labelsStr = prefs.getString("labels_filtro", "cacau,fruto") ?: "cacau,fruto"
         val labels = labelsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 

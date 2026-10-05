@@ -269,8 +269,8 @@ fun TelaModoFieldBook(
                     val listaFiltrada = deteccoesAtuais.filter { det ->
                         val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
                         val score = det.categories.firstOrNull()?.score ?: 0f
-                        score >= modelConfig.threshold &&
-                                (modelConfig.labelsFiltro.isEmpty() || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
+                        score >= (modelConfig.threshold - 0.02f) &&
+                                (modelConfig.labelsFiltro.isEmpty() || detectorHelper.numClasses <= 1 || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
                     }
                     val contagemFrutos = listaFiltrada.size
 
@@ -283,23 +283,35 @@ fun TelaModoFieldBook(
 
                         listaFiltrada.forEach { det ->
                             val rect = det.boundingBox
+                            val left = rect.left * scale + offsetX
+                            val top = rect.top * scale + offsetY
+                            val w = rect.width() * scale
+                            val h = rect.height() * scale
+
                             drawRect(
-                                color = Color.Green,
-                                topLeft = androidx.compose.ui.geometry.Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
-                                size = androidx.compose.ui.geometry.Size(rect.width() * scale, rect.height() * scale),
-                                style = Stroke(width = 3.dp.toPx())
+                                color = Color(0x99000000),
+                                topLeft = androidx.compose.ui.geometry.Offset(left - 1.dp.toPx(), top - 1.dp.toPx()),
+                                size = androidx.compose.ui.geometry.Size(w + 2.dp.toPx(), h + 2.dp.toPx()),
+                                style = Stroke(width = 4.dp.toPx())
+                            )
+                            drawRect(
+                                color = Color(0xFF00E676),
+                                topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                                size = androidx.compose.ui.geometry.Size(w, h),
+                                style = Stroke(width = 2.5.dp.toPx())
                             )
                         }
                     }
 
                     Surface(
-                        Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(16.dp),
-                        color = Color.Black.copy(alpha = 0.7f),
-                        shape = RoundedCornerShape(16.dp)
+                        Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(top = 10.dp),
+                        color = Color(0xDD1E130D),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x66FFA000))
                     ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${pontoAtual.clone} | Contagem: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}%", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${pontoAtual.clone} · Frutos: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text("${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}% min · ${detectorHelper.ultimaLatenciaMs}ms", color = Color(0xFFD7CCC8), fontSize = 11.sp)
                         }
                     }
 

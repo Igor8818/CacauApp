@@ -28,11 +28,11 @@ class ObjectDetectorHelper(
     val context: Context,
     var detectorListener: DetectorListener?,
     var modelSource: ModelSource = ModelSource.Asset("detector.tflite"),
-    var scoreThreshold: Float = 0.55f,
-    var maxResults: Int = 10,
+    var scoreThreshold: Float = 0.30f,
+    var maxResults: Int = 15,
     var labelsModelo: List<String> = listOf("cacau", "fruto"),
-    var numThreads: Int = 2,
-    var tentarGpu: Boolean = true
+    var numThreads: Int = 4,
+    var tentarGpu: Boolean = false
 ) {
     sealed class ModelSource {
         data class Asset(val fileName: String) : ModelSource()
@@ -44,12 +44,10 @@ class ObjectDetectorHelper(
     private var gpuDelegate: GpuDelegate? = null
 
     // Metadados do modelo
-    var inputSize   = 300; private set
+    var inputSize   = 640; private set
     var numAnchors  = 0;   private set
     var numClasses  = 0;   private set
     private var transposed  = false
-    private var coordScale  = 1f
-    private var applySigmoid = true
 
     var ultimoErro: String? = null; private set
     var lastBitmapWidth:  Float = 1f; private set
@@ -58,12 +56,19 @@ class ObjectDetectorHelper(
 
     private var loadedPath: String? = null
 
-    // Buffers reutilizáveis para evitar alocações por frame
+    // Tabela de consulta (LUT) para normalização RGB [0..255] -> [0f..1f] sem divisão em loop
+    private val lut255 = FloatArray(256) { it / 255f }
+
+    // Buffers reutilizáveis para evitar pressão no Garbage Collector (GC)
     private var bufferEntrada: ByteBuffer? = null
     private var pixelsBuffer: IntArray? = null
     private var letterboxBitmap: Bitmap? = null
     private var letterboxCanvas: Canvas? = null
     private val paintCinza = Paint().apply { color = Color.rgb(114, 114, 114) }
+
+    // Arrays 3D de saída pré-alocados para evitar milhares de alocações por frame
+    private var outBufferTransposed: Array<Array<FloatArray>>? = null
+    private var outBufferStandard: Array<Array<FloatArray>>? = null
 
     // Estabilização de contagem (mediana dos últimos N frames)
     private val historicoContagens = mutableListOf<Int>()
@@ -107,7 +112,7 @@ class ObjectDetectorHelper(
                         gpuDelegate = delegate
                         Log.d("Detector", "GPU Delegate ativado com sucesso.")
                     } catch (e: Throwable) {
-                        Log.w("Detector", "GPU Delegate indisponivel, usando CPU: ${e.message}")
+                        Log.w("Detector", "GPU Delegate indisponivel, usando CPU XNNPACK: ${e.message}")
                     }
                 }
             }
@@ -118,36 +123,41 @@ class ObjectDetectorHelper(
             val inShape  = interpreter!!.getInputTensor(0).shape()
             Log.d("Detector", "Input: ${inShape.toList()} | Output: ${outShape.toList()}")
 
-            inputSize = inShape[1]
+            inputSize = if (inShape.size >= 3) inShape[1] else 640
 
             when {
-                // Formato [1, 4+C, anchors] — YOLOv8 / YOLOv11
+                // Formato [1, 4+C, anchors] — YOLOv8 / YOLOv11 (ex: [1, 5, 8400])
                 outShape.size == 3 && outShape[1] in 5..300 && outShape[2] > outShape[1] -> {
                     transposed  = true
                     numClasses  = outShape[1] - 4
                     numAnchors  = outShape[2]
+                    outBufferTransposed = Array(1) { Array(outShape[1]) { FloatArray(numAnchors) } }
+                    outBufferStandard = null
                 }
                 // Formato [1, anchors, 4+C]
                 outShape.size == 3 && outShape[2] in 5..300 && outShape[1] > outShape[2] -> {
                     transposed  = false
                     numAnchors  = outShape[1]
                     numClasses  = outShape[2] - 4
+                    outBufferStandard = Array(1) { Array(numAnchors) { FloatArray(outShape[2]) } }
+                    outBufferTransposed = null
                 }
                 else -> {
                     transposed  = false
                     numAnchors  = if (outShape.size >= 2) outShape[1] else 0
-                    numClasses  = if (outShape.size >= 3) outShape[2] - 4 else 0
+                    numClasses  = if (outShape.size >= 3) outShape[2] - 4 else 1
+                    outBufferStandard = Array(1) { Array(maxOf(numAnchors, 1)) { FloatArray(4 + maxOf(numClasses, 1)) } }
+                    outBufferTransposed = null
                     Log.w("Detector", "Shape de saida nao convencional: ${outShape.toList()}")
                 }
             }
 
-            // Aloca buffers fixos para o tamanho de entrada do modelo
+            // Aloca buffers de tamanho fixo para o modelo
             bufferEntrada = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder())
             pixelsBuffer = IntArray(inputSize * inputSize)
             letterboxBitmap = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
             letterboxCanvas = Canvas(letterboxBitmap!!)
 
-            coordScale = 1f
             loadedPath = file.absolutePath
             ultimoErro = null
             Log.d("Detector", "Modelo carregado com sucesso: size=$inputSize, anchors=$numAnchors, classes=$numClasses, transposto=$transposed")
@@ -160,7 +170,7 @@ class ObjectDetectorHelper(
     }
 
     /**
-     * Executa a inferência YOLO em uma imagem aplicando letterbox e mapeamento reverso.
+     * Executa a inferência YOLO em uma imagem aplicando letterbox e mapeamento reverso otimizado.
      */
     fun detect(image: Bitmap) {
         val inicio = System.currentTimeMillis()
@@ -192,92 +202,97 @@ class ObjectDetectorHelper(
             val dstRect = RectF(padX, padY, padX + scaledW, padY + scaledH)
             lbCanvas.drawBitmap(image, srcRect, dstRect, null)
 
-            // 2. Normalização dos pixels [0, 1] no buffer direto
+            // 2. Normalização dos pixels [0, 1] no buffer direto via LUT rápida (sem divisão float em loop)
             val buf = bufferEntrada ?: ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder()).also { bufferEntrada = it }
             buf.rewind()
             val pixels = pixelsBuffer ?: IntArray(inputSize * inputSize).also { pixelsBuffer = it }
             lbBitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
             for (px in pixels) {
-                buf.putFloat(((px shr 16) and 0xFF) / 255f)
-                buf.putFloat(((px shr 8)  and 0xFF) / 255f)
-                buf.putFloat((px          and 0xFF) / 255f)
+                buf.putFloat(lut255[(px ushr 16) and 0xFF])
+                buf.putFloat(lut255[(px ushr 8) and 0xFF])
+                buf.putFloat(lut255[px and 0xFF])
             }
 
-            // 3. Execução da inferência no Interpreter
-            @Suppress("UNCHECKED_CAST")
-            val out = if (transposed)
-                Array(1) { Array(4 + numClasses) { FloatArray(numAnchors) } } as Array<Array<FloatArray>>
-            else
-                Array(1) { Array(numAnchors) { FloatArray(4 + numClasses) } } as Array<Array<FloatArray>>
+            // 3. Execução da inferência reutilizando buffers pré-alocados (zero GC allocation)
+            val out = if (transposed) {
+                outBufferTransposed ?: Array(1) { Array(4 + numClasses) { FloatArray(numAnchors) } }.also { outBufferTransposed = it }
+            } else {
+                outBufferStandard ?: Array(1) { Array(numAnchors) { FloatArray(4 + numClasses) } }.also { outBufferStandard = it }
+            }
             interp.run(buf, out)
 
-            // Calibração de escala e sigmoid
-            val sampleCoord = if (transposed) out[0][0][0] else out[0][0][0]
-            if (coordScale == 1f && sampleCoord > 2f) {
-                coordScale = 1f / inputSize.toFloat()
-            }
-            val sampleScore = if (transposed) out[0][4][0] else out[0][0][4]
-            applySigmoid = sampleScore < 0f || sampleScore > 1f
+            // 4. Verificação de sistema de coordenadas: pixel (0..inputSize) vs normalizado (0..1)
+            // Checa a âncora central para evitar instabilidades nos cantos
+            val centerIdx = numAnchors / 2
+            val centerCoord = if (transposed) out[0][0][centerIdx] else out[0][centerIdx][0]
+            val isPixelCoord = centerCoord > 1.5f || (if (transposed) out[0][2][centerIdx] else out[0][centerIdx][2]) > 1.5f
 
-            // 4. Decodificação de candidatos com mapeamento reverso retirando o letterbox
-            val candidates = mutableListOf<FloatArray>()
+            // 5. Decodificação de candidatos com mapeamento reverso retirando o letterbox
+            val candidates = ArrayList<FloatArray>(64)
             val maxClasses = maxOf(numClasses, 1)
 
             for (i in 0 until numAnchors) {
-                val cxNorm: Float
-                val cyNorm: Float
-                val wNorm: Float
-                val hNorm: Float
+                val cx: Float
+                val cy: Float
+                val w: Float
+                val h: Float
                 var bestScore = -Float.MAX_VALUE
                 var bestClass = 0
 
                 if (transposed) {
-                    cxNorm = out[0][0][i] * coordScale
-                    cyNorm = out[0][1][i] * coordScale
-                    wNorm  = out[0][2][i] * coordScale
-                    hNorm  = out[0][3][i] * coordScale
+                    val rawCx = out[0][0][i]
+                    val rawCy = out[0][1][i]
+                    val rawW  = out[0][2][i]
+                    val rawH  = out[0][3][i]
+                    cx = if (isPixelCoord) rawCx else rawCx * inputSize
+                    cy = if (isPixelCoord) rawCy else rawCy * inputSize
+                    w  = if (isPixelCoord) rawW  else rawW  * inputSize
+                    h  = if (isPixelCoord) rawH  else rawH  * inputSize
+
                     for (c in 0 until maxClasses) {
                         val s = out[0][4 + c][i]
                         if (s > bestScore) { bestScore = s; bestClass = c }
                     }
                 } else {
-                    cxNorm = out[0][i][0] * coordScale
-                    cyNorm = out[0][i][1] * coordScale
-                    wNorm  = out[0][i][2] * coordScale
-                    hNorm  = out[0][i][3] * coordScale
+                    val rawCx = out[0][i][0]
+                    val rawCy = out[0][i][1]
+                    val rawW  = out[0][i][2]
+                    val rawH  = out[0][i][3]
+                    cx = if (isPixelCoord) rawCx else rawCx * inputSize
+                    cy = if (isPixelCoord) rawCy else rawCy * inputSize
+                    w  = if (isPixelCoord) rawW  else rawW  * inputSize
+                    h  = if (isPixelCoord) rawH  else rawH  * inputSize
+
                     for (c in 0 until maxClasses) {
                         val s = out[0][i][4 + c]
                         if (s > bestScore) { bestScore = s; bestClass = c }
                     }
                 }
 
-                val prob = if (applySigmoid) sigmoid(bestScore) else bestScore.coerceIn(0f, 1f)
+                // O modelo YOLOv8 já tem ativação Sigmoid na saída; apenas aplica caso seja logit puro
+                val prob = if (bestScore < -0.05f || bestScore > 1.05f) sigmoid(bestScore) else bestScore.coerceIn(0f, 1f)
 
-                if (prob >= scoreThreshold && wNorm > 0.01f && hNorm > 0.01f) {
-                    // Mapeamento reverso do letterbox -> espaço da imagem original
-                    val cxPx = cxNorm * inputSize
-                    val cyPx = cyNorm * inputSize
-                    val wPx  = wNorm * inputSize
-                    val hPx  = hNorm * inputSize
-
-                    val origCx = (cxPx - padX) / scale
-                    val origCy = (cyPx - padY) / scale
-                    val origW  = wPx / scale
-                    val origH  = hPx / scale
+                // Filtro preliminar: score >= threshold e tamanho mínimo de fruto
+                if (prob >= scoreThreshold && w > 4f && h > 4f) {
+                    // Mapeamento reverso do letterbox -> coordenadas originais do bitmap
+                    val origCx = (cx - padX) / scale
+                    val origCy = (cy - padY) / scale
+                    val origW  = w / scale
+                    val origH  = h / scale
 
                     val left   = (origCx - origW / 2f).coerceIn(0f, imgW)
                     val top    = (origCy - origH / 2f).coerceIn(0f, imgH)
                     val right  = (origCx + origW / 2f).coerceIn(0f, imgW)
                     val bottom = (origCy + origH / 2f).coerceIn(0f, imgH)
 
-                    if (right > left && bottom > top) {
+                    if ((right - left) >= 4f && (bottom - top) >= 4f) {
                         candidates.add(floatArrayOf(left, top, right, bottom, prob, bestClass.toFloat()))
                     }
                 }
             }
 
-            // 5. NMS e conversão para DetectionResult
+            // 6. NMS e conversão para DetectionResult
             val selecionados = nms(candidates).take(maxResults)
             val detections = selecionados.map { box ->
                 val rect = RectF(box[0], box[1], box[2], box[3])
@@ -289,7 +304,7 @@ class ObjectDetectorHelper(
                 )
             }
 
-            // Estabilização de contagem
+            // Estabilização de contagem (mediana temporal)
             synchronized(historicoContagens) {
                 historicoContagens.add(detections.size)
                 if (historicoContagens.size > janelaMediana) historicoContagens.removeAt(0)
@@ -315,7 +330,7 @@ class ObjectDetectorHelper(
 
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
         val sorted = boxes.sortedByDescending { it[4] }.toMutableList()
-        val result = mutableListOf<FloatArray>()
+        val result = ArrayList<FloatArray>(sorted.size)
         while (sorted.isNotEmpty()) {
             val best = sorted.removeAt(0)
             result.add(best)
@@ -341,7 +356,10 @@ class ObjectDetectorHelper(
     private fun resolveFile(): File? = when (val s = modelSource) {
         is ModelSource.Asset -> try {
             File(context.cacheDir, s.fileName).also { f ->
-                if (!f.exists() || f.length() == 0L) {
+                val assetFd = try { context.assets.openFd(s.fileName) } catch (_: Exception) { null }
+                val assetLen = assetFd?.length ?: -1L
+                assetFd?.close()
+                if (!f.exists() || f.length() == 0L || (assetLen > 0L && f.length() != assetLen)) {
                     context.assets.open(s.fileName).use { i ->
                         FileOutputStream(f).use { i.copyTo(it) }
                     }
