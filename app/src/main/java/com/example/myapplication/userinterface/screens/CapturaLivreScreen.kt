@@ -7,8 +7,15 @@ import android.widget.Toast
 import androidx.camera.core.CameraControl
 import androidx.camera.core.ImageCapture
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.myapplication.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -116,7 +123,22 @@ fun TelaPrincipalCapturaOtimizada(
         !cameraAtiva || detectorHelper == null -> {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Sessão Manual: $ensaio", fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(id = R.drawable.app_logo),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, Color(0xFFE0D5C1), RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("CacauApp CEPEC", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = Color(0xFF1B5E20))
+                            Text("Campanha: $ensaio", fontSize = 12.sp, color = Color(0xFF5D4037))
+                        }
+                    }
                     IconButton(onClick = { mostrarDialogLabels = true }) {
                         Icon(Icons.Default.Settings, null, tint = Color(0xFF2E7D32))
                     }
@@ -260,8 +282,8 @@ fun TelaPrincipalCapturaOtimizada(
                 val listaFiltrada = deteccoesAtuais.filter { det ->
                     val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
                     val score = det.categories.firstOrNull()?.score ?: 0f
-                    score >= modelConfig.threshold &&
-                            (modelConfig.labelsFiltro.isEmpty() || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
+                    score >= (modelConfig.threshold - 0.02f) &&
+                            (modelConfig.labelsFiltro.isEmpty() || detectorHelper.numClasses <= 1 || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
                 }
                 val contagemFrutos = listaFiltrada.size
 
@@ -274,25 +296,47 @@ fun TelaPrincipalCapturaOtimizada(
 
                     listaFiltrada.forEach { det ->
                         val rect = det.boundingBox
+                        val left = rect.left * scale + offsetX
+                        val top = rect.top * scale + offsetY
+                        val w = rect.width() * scale
+                        val h = rect.height() * scale
+
+                        // Contorno escuro para contraste + linha verde-neon
                         drawRect(
-                            color = Color.Green,
-                            topLeft = androidx.compose.ui.geometry.Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
-                            size = androidx.compose.ui.geometry.Size(rect.width() * scale, rect.height() * scale),
-                            style = Stroke(width = 3.dp.toPx())
+                            color = Color(0x99000000),
+                            topLeft = androidx.compose.ui.geometry.Offset(left - 1.dp.toPx(), top - 1.dp.toPx()),
+                            size = androidx.compose.ui.geometry.Size(w + 2.dp.toPx(), h + 2.dp.toPx()),
+                            style = Stroke(width = 4.dp.toPx())
+                        )
+                        drawRect(
+                            color = Color(0xFF00E676),
+                            topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                            size = androidx.compose.ui.geometry.Size(w, h),
+                            style = Stroke(width = 2.5.dp.toPx())
                         )
                     }
                 }
 
                 Surface(
-                    Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(top = 8.dp),
-                    color = Color.Black.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(16.dp)
+                    Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(top = 10.dp),
+                    color = Color(0xDD1E130D),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x66FFA000))
                 ) {
-                    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Detectados ao vivo: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(10.dp).background(
+                                    if (contagemFrutos > 0) Color(0xFF00E676) else Color(0xFFFFB300),
+                                    androidx.compose.foundation.shape.CircleShape
+                                )
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Frutos detectados: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
                         Text(
-                            "${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}% · ${detectorHelper.ultimaLatenciaMs}ms",
-                            color = Color.White.copy(alpha = 0.7f),
+                            "${modelConfig.nomeArquivoModelo} · ${(modelConfig.threshold * 100).roundToInt()}% min · ${detectorHelper.ultimaLatenciaMs}ms",
+                            color = Color(0xFFD7CCC8),
                             fontSize = 11.sp
                         )
                     }
