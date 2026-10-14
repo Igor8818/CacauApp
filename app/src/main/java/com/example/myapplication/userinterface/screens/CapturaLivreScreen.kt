@@ -6,12 +6,17 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.camera.core.CameraControl
 import androidx.camera.core.ImageCapture
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -26,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.data.DetectionResult
@@ -102,6 +108,22 @@ fun TelaPrincipalCapturaOtimizada(
             (if (isNum2) true else parcelaTxt.isNotBlank()) &&
             (if (isNum3) true else plantaTxt.isNotBlank())
 
+    BackHandler(enabled = fotoParaRevisaoUri != null) {
+        fotoParaRevisaoUri = null
+    }
+
+    BackHandler(enabled = cameraAtiva) {
+        cameraAtiva = false
+    }
+
+    BackHandler(enabled = mostrarDialogLabels) {
+        mostrarDialogLabels = false
+    }
+
+    BackHandler(enabled = menuClonesExpandido) {
+        menuClonesExpandido = false
+    }
+
     when {
         fotoParaRevisaoUri != null -> {
             RevisaoCapturaScreen(
@@ -122,7 +144,8 @@ fun TelaPrincipalCapturaOtimizada(
 
         !cameraAtiva || detectorHelper == null -> {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
                             painter = painterResource(id = R.drawable.app_logo),
@@ -213,60 +236,69 @@ fun TelaPrincipalCapturaOtimizada(
                     }
                 }
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(16.dp))
 
                 if (isNum2) {
-                    Text(label2, fontSize = 12.sp, color = Color.Gray)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                        IconButton(onClick = { if (parcelaNum > 1) onParcelaNumChange(parcelaNum - 1) }, modifier = Modifier.size(80.dp)) {
-                            Icon(Icons.Default.RemoveCircle, "Diminuir $label2", tint = Color.Red, modifier = Modifier.size(64.dp))
-                        }
-                        Text("$parcelaNum", fontSize = 40.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp))
-                        IconButton(onClick = { onParcelaNumChange(parcelaNum + 1) }, modifier = Modifier.size(80.dp)) {
-                            Icon(Icons.Default.AddCircle, "Aumentar $label2", tint = Color(0xFF2E7D32), modifier = Modifier.size(64.dp))
-                        }
-                    }
+                    ContadorNumericoCampo(
+                        rotulo = label2,
+                        valor = parcelaNum,
+                        onValorChange = onParcelaNumChange,
+                        onResetar = { onParcelaNumChange(1) }
+                    )
                 } else {
-                    OutlinedTextField(value = parcelaTxt, onValueChange = onParcelaTxtChange, label = { Text(label2) }, modifier = Modifier.fillMaxWidth(), leadingIcon = { Icon(Icons.Default.Layers, null, tint = Color(0xFF2E7D32)) })
+                    OutlinedTextField(
+                        value = parcelaTxt,
+                        onValueChange = onParcelaTxtChange,
+                        label = { Text(label2) },
+                        modifier = Modifier.fillMaxWidth(),
+                        leadingIcon = { Icon(Icons.Default.Layers, null, tint = Color(0xFF2E7D32)) }
+                    )
                 }
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(14.dp))
 
                 if (isNum3) {
-                    Card(modifier = Modifier.fillMaxWidth().height(100.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9))) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(label3.uppercase(), fontSize = 12.sp)
-                                Text("$plantaNum", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1B5E20))
-                            }
-                        }
-                    }
+                    ContadorNumericoCampo(
+                        rotulo = label3,
+                        valor = plantaNum,
+                        onValorChange = onPlantaNumChange,
+                        onResetar = { onPlantaNumChange(1) }
+                    )
                 } else {
-                    OutlinedTextField(value = plantaTxt, onValueChange = onPlantaTxtChange, label = { Text(label3) }, modifier = Modifier.fillMaxWidth(), leadingIcon = { Icon(Icons.Default.PinDrop, null, tint = Color(0xFF2E7D32)) })
+                    OutlinedTextField(
+                        value = plantaTxt,
+                        onValueChange = onPlantaTxtChange,
+                        label = { Text(label3) },
+                        modifier = Modifier.fillMaxWidth(),
+                        leadingIcon = { Icon(Icons.Default.PinDrop, null, tint = Color(0xFF2E7D32)) }
+                    )
                 }
 
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.height(16.dp))
+            }
 
-                OutlinedButton(
-                    onClick = { onSave(Uri.EMPTY, "Não Coletável", 0, 0) },
-                    enabled = isCloneValido,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).height(56.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA NÃO COLETÁVEL")
-                }
-                Button(
-                    onClick = { cameraAtiva = true },
-                    enabled = isCloneValido && detectorHelper != null,
-                    modifier = Modifier.fillMaxWidth().height(72.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                ) {
-                    Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("ABRIR CÂMERA", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { onSave(Uri.EMPTY, "Não Coletável", 0, 0) },
+                enabled = isCloneValido,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).height(56.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA NÃO COLETÁVEL")
+            }
+            Button(
+                onClick = { cameraAtiva = true },
+                enabled = isCloneValido && detectorHelper != null,
+                modifier = Modifier.fillMaxWidth().height(72.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+            ) {
+                Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("ABRIR CÂMERA", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
 
         else -> {
             Box(Modifier.fillMaxSize()) {
@@ -427,6 +459,176 @@ fun TelaPrincipalCapturaOtimizada(
             },
             dismissButton = {
                 TextButton(onClick = { mostrarDialogLabels = false }) { Text("Cancelar") }
+            }
+        )
+    }
+}
+
+/**
+ * Componente unificado de contador numérico para campo (Parcela, Planta, etc.).
+ * Suporta incremento (+), decremento (-), toque no número para digitar valor arbitrário
+ * e botão de atalho para voltar ao número 1.
+ */
+@Composable
+fun ContadorNumericoCampo(
+    rotulo: String,
+    valor: Int,
+    onValorChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    corTema: Color = Color(0xFF2E7D32),
+    onResetar: (() -> Unit)? = null
+) {
+    var mostrarDialogEditar by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF9FBF7)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E8DC))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = rotulo.uppercase(),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF5D4037)
+                )
+
+                if (valor > 1 && onResetar != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFECEFF1),
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { onResetar() }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.RestartAlt,
+                                contentDescription = "Voltar para 1",
+                                tint = Color(0xFF455A64),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "Voltar p/ 1",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF455A64)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Botão Diminuir (-)
+                IconButton(
+                    onClick = { if (valor > 1) onValorChange(valor - 1) },
+                    enabled = valor > 1,
+                    modifier = Modifier.size(54.dp)
+                ) {
+                    Icon(
+                        Icons.Default.RemoveCircle,
+                        contentDescription = "Diminuir $rotulo",
+                        tint = if (valor > 1) Color(0xFFC62828) else Color(0xFFCFD8DC),
+                        modifier = Modifier.size(46.dp)
+                    )
+                }
+
+                // Número central clicável (toque para digitar valor)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { mostrarDialogEditar = true }
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "$valor",
+                        fontSize = 38.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = corTema
+                    )
+                    Text(
+                        text = "toque p/ editar",
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
+                }
+
+                // Botão Aumentar (+)
+                IconButton(
+                    onClick = { onValorChange(valor + 1) },
+                    modifier = Modifier.size(54.dp)
+                ) {
+                    Icon(
+                        Icons.Default.AddCircle,
+                        contentDescription = "Aumentar $rotulo",
+                        tint = corTema,
+                        modifier = Modifier.size(46.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    if (mostrarDialogEditar) {
+        var textoDigitado by remember { mutableStateOf(valor.toString()) }
+        AlertDialog(
+            onDismissRequest = { mostrarDialogEditar = false },
+            title = { Text("Definir $rotulo", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Informe o número desejado para $rotulo:", fontSize = 13.sp, color = Color.Gray)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = textoDigitado,
+                        onValueChange = { novo ->
+                            if (novo.all { it.isDigit() }) {
+                                textoDigitado = novo
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val num = textoDigitado.toIntOrNull()
+                        if (num != null && num >= 1) {
+                            onValorChange(num)
+                        }
+                        mostrarDialogEditar = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = corTema)
+                ) {
+                    Text("Confirmar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { mostrarDialogEditar = false }) {
+                    Text("Cancelar")
+                }
             }
         )
     }

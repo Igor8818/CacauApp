@@ -1,6 +1,7 @@
 package com.example.myapplication.userinterface.screens
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +36,10 @@ fun DiagnosticoScreen(
     detectorHelper: ObjectDetectorHelper?,
     onVoltar: () -> Unit
 ) {
+    BackHandler {
+        onVoltar()
+    }
+
     val context = LocalContext.current
     val verde = Color(0xFF2E7D32)
 

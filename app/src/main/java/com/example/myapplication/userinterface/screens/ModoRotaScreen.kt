@@ -4,6 +4,7 @@ import android.app.Activity
 import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.camera.core.CameraControl
 import androidx.camera.core.ImageCapture
 import androidx.compose.foundation.Canvas
@@ -89,6 +90,22 @@ fun TelaModoFieldBook(
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    BackHandler(enabled = fotoParaRevisaoUri != null) {
+        fotoParaRevisaoUri = null
+    }
+
+    BackHandler(enabled = cameraAtiva) {
+        cameraAtiva = false
+    }
+
+    BackHandler(enabled = mostrarMapa) {
+        mostrarMapa = false
+    }
+
+    BackHandler(enabled = confirmarPlantaMorta) {
+        confirmarPlantaMorta = false
     }
 
     if (rotaCompleta.isEmpty()) {

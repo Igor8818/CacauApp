@@ -252,7 +252,9 @@ class AppRepository(private val context: Context) {
         isNum2: Boolean,
         isNum3: Boolean,
         operador: String = "",
-        fazenda: String = ""
+        fazenda: String = "",
+        valorNum2: Int = 1,
+        valorNum3: Int = 1
     ) {
         prefs.edit().apply {
             putString("ensaio_nome", ensaioNome)
@@ -265,8 +267,16 @@ class AppRepository(private val context: Context) {
             putBoolean("is_num3", isNum3)
             putString("operador", operador)
             putString("fazenda", fazenda)
+            putInt("valor_num2", valorNum2)
+            putInt("valor_num3", valorNum3)
             apply()
         }
+    }
+
+    fun carregarValoresNumericos(): Pair<Int, Int> {
+        val v2 = prefs.getInt("valor_num2", 1).coerceAtLeast(1)
+        val v3 = prefs.getInt("valor_num3", 1).coerceAtLeast(1)
+        return Pair(v2, v3)
     }
 
     fun carregarEnsaioNome(): String = prefs.getString("ensaio_nome", "") ?: ""

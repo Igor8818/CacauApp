@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -107,6 +108,16 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
     val colunasEncontradas = remember { mutableStateListOf<String>() }
     var uriArquivoPendente by remember { mutableStateOf<Uri?>(null) }
     var avisoModeloExibido by rememberSaveable { mutableStateOf(false) }
+    var ultimoToqueVoltar by remember { mutableLongStateOf(0L) }
+
+    BackHandler(enabled = mostrarDialogNovoEnsaio) {
+        mostrarDialogNovoEnsaio = false
+    }
+
+    BackHandler(enabled = mostrarDialogMapeamento) {
+        mostrarDialogMapeamento = false
+        uriArquivoPendente = null
+    }
 
     // Permissões de Câmera e Localização
     val launcherPermissoes = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissoes ->
@@ -195,6 +206,20 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
         }
 
         !configConcluida -> {
+            val podeVoltarParaSessao = listaRegistros.isNotEmpty() || rotaPreCarregada.isNotEmpty()
+            BackHandler(enabled = podeVoltarParaSessao) {
+                viewModel.setConfigConcluida(true)
+            }
+            BackHandler(enabled = !podeVoltarParaSessao) {
+                val agora = System.currentTimeMillis()
+                if (agora - ultimoToqueVoltar < 2000L) {
+                    (context as? ComponentActivity)?.finish()
+                } else {
+                    ultimoToqueVoltar = agora
+                    Toast.makeText(context, "Pressione voltar novamente para sair", Toast.LENGTH_SHORT).show()
+                }
+            }
+
             TelaCheckInSimples(
                 ensaio = ensaioNome,
                 onEnsaioChange = { viewModel.setEnsaioNome(it) },
@@ -257,6 +282,20 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
         }
 
         else -> {
+            BackHandler(enabled = abaSelecionada != 0) {
+                abaSelecionada = 0
+            }
+
+            BackHandler(enabled = abaSelecionada == 0) {
+                val agora = System.currentTimeMillis()
+                if (agora - ultimoToqueVoltar < 2000L) {
+                    (context as? ComponentActivity)?.finish()
+                } else {
+                    ultimoToqueVoltar = agora
+                    Toast.makeText(context, "Pressione voltar novamente para sair do CacauApp", Toast.LENGTH_SHORT).show()
+                }
+            }
+
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
@@ -331,7 +370,15 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             },
                             cloneVal = valorVariavel1, onCloneChange = { viewModel.setValor1(it) },
                             historicoClones = historicoValores1,
-                            parcelaNum = valorNumVariavel2, onParcelaNumChange = { viewModel.setValorNum2(it) },
+                            parcelaNum = valorNumVariavel2,
+                            onParcelaNumChange = { novaParcela ->
+                                val anterior = valorNumVariavel2
+                                viewModel.setValorNum2(novaParcela)
+                                if (novaParcela > anterior && tipoNumVariavel3) {
+                                    viewModel.setValorNum3(1)
+                                    Toast.makeText(context, "$labelVariavel2 $novaParcela iniciada ($labelVariavel3 reiniciada em 1)", Toast.LENGTH_SHORT).show()
+                                }
+                            },
                             parcelaTxt = valorTxtVariavel2, onParcelaTxtChange = { viewModel.setValorTxt2(it) },
                             plantaNum = valorNumVariavel3, onPlantaNumChange = { viewModel.setValorNum3(it) },
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { viewModel.setValorTxt3(it) },

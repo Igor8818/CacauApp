@@ -137,6 +137,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _isNum2.value = n2
             _isNum3.value = n3
 
+            val (v2, v3) = repository.carregarValoresNumericos()
+            _valorNum2.value = v2
+            _valorNum3.value = v3
+
             // Carrega modelo salvo com verificação de arquivo existente
             val salvo = repository.carregarModelConfig()
             if (salvo.modeloSelecionado != null && !assetModeloExiste(getApplication(), salvo.modeloSelecionado.nomeArquivo)) {
@@ -304,7 +308,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 isNum2 = _isNum2.value,
                 isNum3 = _isNum3.value,
                 operador = _operador.value,
-                fazenda = _fazenda.value
+                fazenda = _fazenda.value,
+                valorNum2 = _valorNum2.value,
+                valorNum3 = _valorNum3.value
             )
         }
     }
@@ -319,8 +325,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setValor1(v: String) { _valor1.value = v }
-    fun setValorNum2(v: Int) { _valorNum2.value = v }
-    fun setValorNum3(v: Int) { _valorNum3.value = v }
+    fun setValorNum2(v: Int) { 
+        _valorNum2.value = v.coerceAtLeast(1)
+        salvarEstadoSessao()
+    }
+    fun setValorNum3(v: Int) { 
+        _valorNum3.value = v.coerceAtLeast(1)
+        salvarEstadoSessao()
+    }
+    fun resetarPlanta() {
+        _valorNum3.value = 1
+        salvarEstadoSessao()
+    }
+    fun resetarParcela() {
+        _valorNum2.value = 1
+        salvarEstadoSessao()
+    }
     fun setValorTxt2(v: String) { _valorTxt2.value = v }
     fun setValorTxt3(v: String) { _valorTxt3.value = v }
     fun setConfigConcluida(v: Boolean) { _configConcluida.value = v; salvarEstadoSessao() }
