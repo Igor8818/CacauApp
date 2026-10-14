@@ -15,6 +15,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +45,18 @@ fun CameraWithAI(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
+
+    // Ao sair da tela de câmera (ex.: abrir a revisão da foto) é obrigatório desvincular o CameraX;
+    // caso contrário o analisador continua rodando em segundo plano e disputa o detector com a revisão.
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                if (providerFuture.isDone) providerFuture.get().unbindAll()
+            } catch (e: Exception) {
+                Log.w("CameraAI", "Falha ao desvincular camera: ${e.message}")
+            }
+        }
+    }
 
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { ctx ->
@@ -204,12 +217,47 @@ fun tirarFoto(
 /**
  * Decodifica um bitmap a partir de uma URI de imagem no dispositivo.
  */
-fun carregarBitmapDeUri(context: Context, uri: Uri): Bitmap? {
+fun carregarBitmapDeUri(context: Context, uri: Uri, ladoMaximo: Int = 2400): Bitmap? {
     return try {
-        val input: InputStream? = context.contentResolver.openInputStream(uri)
-        BitmapFactory.decodeStream(input)
+        // 1. Dimensões originais (sem alocar pixels) para calcular o downsample
+        val limites = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, limites) }
+        if (limites.outWidth <= 0 || limites.outHeight <= 0) return null
+
+        var amostra = 1
+        while (maxOf(limites.outWidth, limites.outHeight) / (amostra * 2) >= ladoMaximo) amostra *= 2
+
+        // 2. Decodifica já reduzido (evita OOM com fotos de 12-50 MP)
+        val bruto = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = amostra })
+        } ?: return null
+
+        // 3. Aplica a orientação EXIF: o Coil exibe a foto já girada, então a IA precisa
+        //    analisar exatamente a mesma orientação para que as caixas coincidam com a imagem.
+        val graus = lerRotacaoExif(context, uri)
+        if (graus == 0) bruto else {
+            val m = Matrix().apply { postRotate(graus.toFloat()) }
+            Bitmap.createBitmap(bruto, 0, 0, bruto.width, bruto.height, m, true).also {
+                if (it !== bruto) bruto.recycle()
+            }
+        }
     } catch (e: Exception) {
         Log.e("CameraUtils", "Erro ao carregar bitmap da URI: ${e.message}")
         null
     }
 }
+
+/** Rotação (0/90/180/270) indicada pelo EXIF da foto, ou 0 se ausente/ilegível. */
+private fun lerRotacaoExif(context: Context, uri: Uri): Int = try {
+    context.contentResolver.openInputStream(uri)?.use { s ->
+        when (android.media.ExifInterface(s).getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_NORMAL
+        )) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
+            else -> 0
+        }
+    } ?: 0
+} catch (_: Exception) { 0 }

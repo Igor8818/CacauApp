@@ -67,33 +67,27 @@ fun TelaConfiguracaoModelo(
     val launcherModelo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
             scope.launch {
-                // Validação de assinatura TFL3 e hash SHA-256
-                val info = withContext(Dispatchers.IO) {
-                    try {
-                        val bytes = context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() }
-                        if (bytes != null && bytes.size >= 8) {
-                            val magic = String(bytes.sliceArray(4..7))
-                            val isTfl3 = magic == "TFL3" || magic.startsWith("TFL")
-                            val md = MessageDigest.getInstance("SHA-256").digest(bytes)
-                            val sha = md.take(6).joinToString("") { b -> "%02x".format(b) }
-                            val mb = "%.2f MB".format(bytes.size.toDouble() / (1024 * 1024))
-                            if (isTfl3) "Tamanho: $mb | SHA-256: $sha..." else "Aviso: assinatura TFL3 não encontrada ($mb)"
-                        } else "Arquivo inválido"
-                    } catch (e: Exception) {
-                        "Não foi possível inspecionar o arquivo"
+                detalhesModeloExterno = "Validando modelo..."
+                val resultado = withContext(Dispatchers.IO) { importarModeloExterno(context, it) }
+                resultado.fold(
+                    onSuccess = { importado ->
+                        modeloExternoUri = importado.uri
+                        modeloExternoNome = importado.nome
+                        modeloSelecionado = null
+                        detalhesModeloExterno = "%.2f MB | SHA-256: %s... | %s".format(
+                            importado.tamanhoMb, importado.sha256Curto, importado.formato.descricao()
+                        )
+                        Toast.makeText(context, "Modelo validado e importado!", Toast.LENGTH_SHORT).show()
+                    },
+                    onFailure = { erro ->
+                        detalhesModeloExterno = ""
+                        Toast.makeText(
+                            context,
+                            "Modelo recusado: ${erro.message ?: "formato inválido"}",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
-                }
-                detalhesModeloExterno = info
-
-                val importado = withContext(Dispatchers.IO) { importarModeloExterno(context, it) }
-                if (importado != null) {
-                    modeloExternoUri = importado.first
-                    modeloExternoNome = importado.second
-                    modeloSelecionado = null
-                    Toast.makeText(context, "Modelo importado com sucesso!", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Não foi possível importar o modelo. Tente novamente.", Toast.LENGTH_LONG).show()
-                }
+                )
             }
         }
     }

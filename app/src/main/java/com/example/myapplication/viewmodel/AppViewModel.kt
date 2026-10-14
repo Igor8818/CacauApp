@@ -51,6 +51,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _configConcluida = MutableStateFlow(false)
     val configConcluida: StateFlow<Boolean> = _configConcluida.asStateFlow()
 
+    /** Indica que os dados persistidos terminaram de ser lidos do disco (usado pela splash). */
+    private val _dadosCarregados = MutableStateFlow(false)
+    val dadosCarregados: StateFlow<Boolean> = _dadosCarregados.asStateFlow()
+
     private val _historicoClones = MutableStateFlow<List<String>>(emptyList())
     val historicoClones: StateFlow<List<String>> = _historicoClones.asStateFlow()
 
@@ -140,6 +144,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 _modelConfig.value = salvo
             }
+            _dadosCarregados.value = true
         }
     }
 
@@ -231,13 +236,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun marcarPontoRota(pontoOriginal: RotaColeta, coletado: Boolean, qtdFrutos: String) {
+    fun marcarPontoRota(
+        pontoOriginal: RotaColeta,
+        coletado: Boolean,
+        qtdFrutos: String,
+        observacao: String = pontoOriginal.observacao
+    ) {
         val listaAtual = _rota.value.toMutableList()
         val idx = listaAtual.indexOfFirst {
             it.clone == pontoOriginal.clone && it.parcela == pontoOriginal.parcela && it.planta == pontoOriginal.planta
         }
         if (idx >= 0) {
-            listaAtual[idx] = pontoOriginal.copy(coletado = coletado, qtdFrutos = qtdFrutos)
+            listaAtual[idx] = pontoOriginal.copy(coletado = coletado, qtdFrutos = qtdFrutos, observacao = observacao)
             _rota.value = listaAtual
             viewModelScope.launch(Dispatchers.IO) {
                 repository.salvarRota(listaAtual)

@@ -18,9 +18,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.*
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import org.tensorflow.lite.DataType
+import org.tensorflow.lite.Interpreter
 
 /**
  * Lê apenas a primeira linha (cabeçalho) de um arquivo CSV/Excel apontado por [uri].
@@ -105,7 +110,6 @@ suspend fun exportarPlanilhaCEPECAssync(
     }
 
     val dataHora = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.getDefault()).format(Date())
-    val dataIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date())
     val nomeEnsaio = limparSimbologiaPura(ensaio).ifBlank { "SemNome" }
     val nomeFinal = "Coleta_${nomeEnsaio}_${dataHora}.csv"
     val separador = ";"
@@ -130,6 +134,7 @@ suspend fun exportarPlanilhaCEPECAssync(
         "Operador",
         "Fazenda",
         "Versao_App",
+        "Ocorrencias",
         "Foto_URI"
     ).joinToString(separador) { escaparECorrigirCsv(it, separador) }
 
@@ -146,12 +151,18 @@ suspend fun exportarPlanilhaCEPECAssync(
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
             if (uri != null) {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    gravarCsvNoFluxo(out, cabecalho, registros, separador, dataIso)
+                try {
+                    val saida = context.contentResolver.openOutputStream(uri)
+                        ?: throw IOException("Sem acesso de escrita ao arquivo criado.")
+                    saida.use { out -> gravarCsvNoFluxo(out, cabecalho, registros, separador) }
+                    arquivoCriadoUri = uri
+                    sucesso = true
+                    mensagemRetorno = "Planilha salva em Downloads/CEPEC: $nomeFinal"
+                } catch (e: Exception) {
+                    // Evita deixar um arquivo vazio/corrompido em Downloads
+                    Log.w("FileUtils", "Falha no MediaStore, usando fallback: ${e.message}")
+                    try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
                 }
-                arquivoCriadoUri = uri
-                sucesso = true
-                mensagemRetorno = "Planilha salva em Downloads/CEPEC: $nomeFinal"
             }
         }
 
@@ -160,7 +171,7 @@ suspend fun exportarPlanilhaCEPECAssync(
             val diretorio = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
             val arquivoDestino = File(diretorio, nomeFinal)
             FileOutputStream(arquivoDestino).use { out ->
-                gravarCsvNoFluxo(out, cabecalho, registros, separador, dataIso)
+                gravarCsvNoFluxo(out, cabecalho, registros, separador)
             }
             arquivoCriadoUri = FileProvider.getUriForFile(
                 context,
@@ -197,6 +208,19 @@ fun exportarPlanilhaCEPEC(
     }
 }
 
+/** Formata número com vírgula decimal (padrão pt-BR), coerente com o delimitador ';' e aceito pelo Excel brasileiro. */
+private fun numBr(valor: Double, casas: Int): String =
+    String.format(Locale("pt", "BR"), "%.${casas}f", valor)
+
+/**
+ * Obtém o clone a partir do ID da planta. O ID é "{clone}_{rotulo2}{parcela}_{rotulo3}{planta}",
+ * então removemos os dois últimos segmentos: clones que contêm '_' não são mais truncados.
+ */
+fun cloneDoPlantId(plantId: String): String {
+    val partes = plantId.split("_")
+    return if (partes.size >= 3) partes.dropLast(2).joinToString("_") else partes.firstOrNull().orEmpty()
+}
+
 /**
  * Grava o conteúdo CSV no stream fornecido, incluindo o cabeçalho UTF-8 BOM.
  */
@@ -204,39 +228,51 @@ private fun gravarCsvNoFluxo(
     out: OutputStream,
     cabecalho: String,
     registros: List<RegistroCacau>,
-    separador: String,
-    dataIsoPadrao: String
+    separador: String
 ) {
     // Injeção de UTF-8 BOM (0xEF, 0xBB, 0xBF) para compatibilidade nativa com Excel
     out.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
+    val formatoIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+
     BufferedWriter(OutputStreamWriter(out, StandardCharsets.UTF_8)).use { writer ->
         writer.write(cabecalho)
         writer.newLine()
 
+        // Texto livre: protegido contra injeção de fórmulas. Numéricos: apenas escape RFC 4180
+        // (senão latitudes/longitudes negativas receberiam um apóstrofo e virariam texto).
+        fun t(v: String) = escaparECorrigirCsv(v, separador)
+        fun n(v: String) = escaparECorrigirCsv(v, separador, protegerFormula = false)
+
         registros.forEach { reg ->
-            val clone = reg.plantId.split("_").firstOrNull() ?: ""
+            val temGps = !(reg.lat == 0.0 && reg.lng == 0.0)
+            val naoColetavel = reg.diagnostico.toIntOrNull() == null
+            val status = if (naoColetavel) reg.diagnostico.ifBlank { "Sem contagem" } else "OK"
+            val iso = if (reg.timestampMs > 0L) formatoIso.format(Date(reg.timestampMs)) else ""
+
             val linha = listOf(
-                reg.ensaioManual,
-                reg.plantId,
-                clone,
-                reg.parcelaManual,
-                reg.numPlanta.toString(),
-                reg.contagemIa.toString(),
-                reg.contagemFinal.toString(),
-                reg.diagnostico,
-                reg.data,
-                dataIsoPadrao,
-                reg.lat.toString(),
-                reg.lng.toString(),
-                "%.1f".format(Locale.US, reg.precisaoGpsM),
-                "%.1f".format(Locale.US, reg.altitude),
-                reg.modelo,
-                "%.2f".format(Locale.US, reg.threshold),
-                reg.operador,
-                reg.fazenda,
-                reg.versaoApp,
-                reg.uri.toString()
-            ).joinToString(separador) { escaparECorrigirCsv(it, separador) }
+                t(reg.ensaioManual),
+                t(reg.plantId),
+                t(cloneDoPlantId(reg.plantId)),
+                t(reg.parcelaManual),
+                n(reg.numPlanta.toString()),
+                n(if (naoColetavel) "" else reg.contagemIa.toString()),
+                n(if (naoColetavel) "" else reg.contagemFinal.toString()),
+                t(status),
+                t(reg.data),
+                n(iso),
+                // Sem fix de GPS o app guarda 0,0 (oceano): exporta vazio em vez de coordenada falsa
+                n(if (temGps) numBr(reg.lat, 7) else ""),
+                n(if (temGps) numBr(reg.lng, 7) else ""),
+                n(if (temGps) numBr(reg.precisaoGpsM.toDouble(), 1) else ""),
+                n(if (temGps) numBr(reg.altitude, 1) else ""),
+                t(reg.modelo),
+                n(numBr(reg.threshold.toDouble(), 2)),
+                t(reg.operador),
+                t(reg.fazenda),
+                t(reg.versaoApp),
+                t(reg.observacao.split("|").filter { it.isNotBlank() }.joinToString(" / ")),
+                t(reg.uri.toString())
+            ).joinToString(separador)
 
             writer.write(linha)
             writer.newLine()
@@ -340,13 +376,14 @@ fun detectarSeparador(cabecalho: String): Char {
 
 /**
  * Sanitiza e escapa valores para saída CSV:
- * 1. Proteção contra CSV Formula Injection: se iniciar com '=', '+', '-' ou '@', prefixa com '\''.
+ * 1. Proteção contra CSV Formula Injection (apenas quando [protegerFormula]): se iniciar com
+ *    '=', '+', '-' ou '@', prefixa com '\''. Deve ser desligada para colunas numéricas.
  * 2. RFC 4180 Escaping: se contiver delimitador, aspas ou quebra de linha, envolve em aspas e duplica aspas internas.
  */
-fun escaparECorrigirCsv(valor: String, separador: String = ";"): String {
+fun escaparECorrigirCsv(valor: String, separador: String = ";", protegerFormula: Boolean = true): String {
     var v = valor.trim()
     // Proteção contra injeção de fórmulas executáveis no Excel / LibreOffice
-    if (v.startsWith("=") || v.startsWith("+") || v.startsWith("-") || v.startsWith("@")) {
+    if (protegerFormula && (v.startsWith("=") || v.startsWith("+") || v.startsWith("-") || v.startsWith("@"))) {
         v = "'$v"
     }
 
@@ -381,20 +418,116 @@ fun limparBomECaracteresInvalidos(texto: String): String {
         .trim()
 }
 
+/** Resultado de uma importação de modelo bem-sucedida. */
+data class ModeloImportado(
+    val uri: Uri,
+    val nome: String,
+    val formato: FormatoModelo,
+    val tamanhoMb: Double,
+    val sha256Curto: String
+)
+
 /**
- * Importa um modelo .tflite escolhido pelo usuário copiando-o para o
- * armazenamento interno do app (filesDir/modelo_externo.tflite).
+ * Importa um modelo .tflite escolhido pelo usuário de forma segura:
+ * 1. copia para um arquivo temporário calculando o SHA-256 (sem carregar tudo na memória);
+ * 2. valida a assinatura TFL3;
+ * 3. carrega no TFLite, valida entrada/saída e roda uma inferência de teste;
+ * 4. só então promove para um arquivo definitivo com nome único.
+ * O modelo ativo anterior nunca é sobrescrito por um arquivo inválido, e o nome único garante
+ * que o app recarregue o detector ao importar uma nova versão.
  */
-fun importarModeloExterno(context: Context, uri: Uri): Pair<Uri, String>? {
+fun importarModeloExterno(context: Context, uri: Uri): Result<ModeloImportado> {
     val nome = nomeDoArquivo(context, uri) ?: "modelo_externo.tflite"
+    val temporario = File(context.filesDir, "modelo_importando.tmp")
     return try {
-        val destino = File(context.filesDir, "modelo_externo.tflite")
-        val entrada = context.contentResolver.openInputStream(uri) ?: return null
-        entrada.use { i -> FileOutputStream(destino).use { o -> i.copyTo(o) } }
-        if (destino.length() == 0L) null else Pair(Uri.fromFile(destino), nome)
+        val md = MessageDigest.getInstance("SHA-256")
+        val entrada = context.contentResolver.openInputStream(uri)
+            ?: return Result.failure(IllegalStateException("Não foi possível abrir o arquivo selecionado."))
+        entrada.use { i ->
+            FileOutputStream(temporario).use { o ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = i.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n)
+                    md.update(buf, 0, n)
+                }
+            }
+        }
+
+        if (temporario.length() < 1024L) {
+            throw IllegalArgumentException("Arquivo muito pequeno para ser um modelo TFLite.")
+        }
+        val cabecalho = ByteArray(8)
+        temporario.inputStream().use { it.read(cabecalho) }
+        if (String(cabecalho, 4, 4, Charsets.US_ASCII) != "TFL3") {
+            throw IllegalArgumentException("O arquivo não é um modelo TFLite válido (assinatura TFL3 ausente).")
+        }
+
+        val formato = validarModeloTflite(temporario)
+
+        val destino = File(context.filesDir, "modelo_${System.currentTimeMillis()}.tflite")
+        if (!temporario.renameTo(destino)) {
+            temporario.copyTo(destino, overwrite = true)
+            temporario.delete()
+        }
+
+        // Mantém só os 2 modelos importados mais recentes (o ativo + o anterior)
+        context.filesDir.listFiles { f -> f.name.startsWith("modelo_") && f.name.endsWith(".tflite") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(2)
+            ?.forEach { it.delete() }
+
+        val sha = md.digest().take(6).joinToString("") { "%02x".format(it) }
+        Result.success(
+            ModeloImportado(Uri.fromFile(destino), nome, formato, destino.length() / (1024.0 * 1024.0), sha)
+        )
     } catch (e: Exception) {
         Log.e("FileUtils", "Erro ao importar modelo: ${e.message}")
-        null
+        temporario.delete()
+        Result.failure(e)
+    }
+}
+
+/**
+ * Carrega o modelo, valida shapes/tipos e executa uma inferência com entrada zerada para garantir
+ * que ele realmente roda neste aparelho. Lança exceção com mensagem amigável se não for suportado.
+ */
+private fun validarModeloTflite(arquivo: File): FormatoModelo {
+    val interp = try {
+        Interpreter(arquivo, Interpreter.Options().apply { setNumThreads(2) })
+    } catch (e: Exception) {
+        throw IllegalArgumentException("O TFLite não conseguiu carregar o modelo: ${e.message?.take(160)}")
+    }
+    try {
+        if (interp.outputTensorCount != 1) {
+            throw IllegalArgumentException(
+                "Modelo com ${interp.outputTensorCount} saídas não suportado (esperado detector YOLO com 1 saída)."
+            )
+        }
+        val inT = interp.getInputTensor(0)
+        val outT = interp.getOutputTensor(0)
+        val formato = analisarFormatoModelo(
+            inShape = inT.shape(),
+            entradaFloat32 = inT.dataType() == DataType.FLOAT32,
+            entradaUint8 = inT.dataType() == DataType.UINT8,
+            outShape = outT.shape(),
+            saidaFloat32 = outT.dataType() == DataType.FLOAT32
+        )
+
+        val bytesPorCanal = if (formato.entradaFloat) 4 else 1
+        val entrada = ByteBuffer.allocateDirect(formato.inputSize * formato.inputSize * 3 * bytesPorCanal)
+            .order(ByteOrder.nativeOrder())
+        val s = outT.shape()
+        val saida = Array(s[0]) { Array(s[1]) { FloatArray(s[2]) } }
+        try {
+            interp.run(entrada, saida)
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Falha ao executar o modelo: ${e.message?.take(160)}")
+        }
+        return formato
+    } finally {
+        interp.close()
     }
 }
 

@@ -5,6 +5,9 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -39,7 +42,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    AppCacauCEPEC()
+                    val appViewModel: AppViewModel = viewModel()
+                    val dadosCarregados by appViewModel.dadosCarregados.collectAsStateWithLifecycle()
+                    var splashVisivel by rememberSaveable { mutableStateOf(true) }
+
+                    Box(Modifier.fillMaxSize()) {
+                        AppCacauCEPEC(appViewModel)
+                        AnimatedVisibility(
+                            visible = splashVisivel,
+                            exit = fadeOut(tween(450))
+                        ) {
+                            SplashScreen(
+                                dadosCarregados = dadosCarregados,
+                                onConcluir = { splashVisivel = false }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -342,7 +360,8 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                                     modelo = modelConfig.nomeExibicao,
                                     threshold = modelConfig.threshold,
                                     precisaoGpsM = gpsPrecisao,
-                                    altitude = altitudeAtual
+                                    altitude = altitudeAtual,
+                                    timestampMs = System.currentTimeMillis()
                                 )
                                 viewModel.salvarRegistro(reg)
                                 coroutineScope.launch {
@@ -360,7 +379,7 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             onAbrirModelo = { mostrarTelaModelo = true },
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { viewModel.limparRota() },
-                            onSaveColetaRota = { uri, ponto, contagemFinal ->
+                            onSaveColetaRota = { uri, ponto, contagemFinal, observacao, contagemIaRevisada ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
                                 val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
                                 val contagemInt = contagemFinal.toIntOrNull() ?: 0
@@ -375,15 +394,17 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                                     numPlanta = ponto.planta,
                                     lat = latAtual,
                                     lng = lngAtual,
-                                    contagemIa = contagemInt,
+                                    contagemIa = contagemIaRevisada,
                                     contagemFinal = contagemInt,
                                     modelo = modelConfig.nomeExibicao,
                                     threshold = modelConfig.threshold,
                                     precisaoGpsM = gpsPrecisao,
-                                    altitude = altitudeAtual
+                                    altitude = altitudeAtual,
+                                    observacao = observacao,
+                                    timestampMs = System.currentTimeMillis()
                                 )
                                 viewModel.salvarRegistro(reg)
-                                viewModel.marcarPontoRota(ponto, coletado = true, qtdFrutos = contagemFinal)
+                                viewModel.marcarPontoRota(ponto, coletado = true, qtdFrutos = contagemFinal, observacao = observacao)
                                 coroutineScope.launch {
                                     snackbarHostState.showSnackbar("Ponto ${ponto.clone} P${ponto.parcela} salvo")
                                 }
