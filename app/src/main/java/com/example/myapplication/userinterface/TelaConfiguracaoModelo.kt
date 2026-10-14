@@ -1,6 +1,7 @@
 package com.example.myapplication.userinterface
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -45,6 +46,10 @@ fun TelaConfiguracaoModelo(
     onSalvar: (ModelConfig) -> Unit,
     onVoltar: () -> Unit
 ) {
+    BackHandler {
+        onVoltar()
+    }
+
     // --- estados locais para edição ---
     var modeloSelecionado by remember { mutableStateOf(configAtual.modeloSelecionado) }
     var modeloExternoUri by remember { mutableStateOf(configAtual.modeloExternoUri) }

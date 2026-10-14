@@ -3,6 +3,7 @@ package com.example.myapplication.userinterface.screens
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -55,6 +56,10 @@ fun RevisaoCapturaScreen(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+
+    BackHandler {
+        onRefazer()
+    }
 
     var carregandoInferencia by remember { mutableStateOf(true) }
     var bitmapFoto by remember { mutableStateOf<Bitmap?>(null) }

@@ -1,6 +1,7 @@
 package com.example.myapplication.userinterface.screens
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,6 +46,10 @@ fun TelaGaleria(
     var itemEmEdicao by remember { mutableStateOf<RegistroCacau?>(null) }
     var textoEdicao by remember { mutableStateOf("") }
     var exportandoPlanilha by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = itemEmEdicao != null) {
+        itemEmEdicao = null
+    }
 
     val totalRegistros = registros.size
     val totalFrutos = registros.sumOf { it.diagnostico.toIntOrNull() ?: 0 }

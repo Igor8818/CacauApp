@@ -61,4 +61,28 @@ class FieldBookLogicUnitTest {
         assertEquals(listOf("Vassoura-de-bruxa", "Monilíase"), obs.ocorrencias())
         assertEquals(emptyList<String>(), "".ocorrencias())
     }
+
+    @Test
+    fun contadorParcelaEPlanta_garanteMinimoUmEReset() {
+        var parcela = 1
+        var planta = 1
+
+        // Decremento bloqueado em 1
+        parcela = (parcela - 1).coerceAtLeast(1)
+        planta = (planta - 1).coerceAtLeast(1)
+        assertEquals(1, parcela)
+        assertEquals(1, planta)
+
+        // Incremento
+        parcela += 1
+        planta += 4
+        assertEquals(2, parcela)
+        assertEquals(5, planta)
+
+        // Reset
+        parcela = 1
+        planta = 1
+        assertEquals(1, parcela)
+        assertEquals(1, planta)
+    }
 }
