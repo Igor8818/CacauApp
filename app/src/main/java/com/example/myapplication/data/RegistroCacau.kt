@@ -21,5 +21,8 @@ data class RegistroCacau(
     val fazenda: String = "",
     val precisaoGpsM: Float = 0f,
     val altitude: Double = 0.0,
-    val versaoApp: String = "1.0"
+    val versaoApp: String = "1.0",
+    val observacao: String = "",
+    /** Momento real da captura (epoch ms). 0 em registros antigos, criados antes deste campo existir. */
+    val timestampMs: Long = 0L
 )

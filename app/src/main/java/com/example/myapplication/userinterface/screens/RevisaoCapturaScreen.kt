@@ -66,28 +66,24 @@ fun RevisaoCapturaScreen(
     var canvasHeight by remember { mutableFloatStateOf(1f) }
 
     LaunchedEffect(fotoUri) {
-        withContext(Dispatchers.IO) {
-            val bmp = carregarBitmapDeUri(context, fotoUri)
-            bitmapFoto = bmp
-            if (bmp != null && detectorHelper != null) {
-                detectorHelper.setListener(object : ObjectDetectorHelper.DetectorListener {
-                    override fun onResults(results: List<DetectionResult>) {
-                        val filtradas = results.filter { det ->
-                            val score = det.categories.firstOrNull()?.score ?: 0f
-                            score >= (modelConfig.threshold - 0.02f)
-                        }.map { it.boundingBox }
-
-                        caixasDetectadas.clear()
-                        caixasDetectadas.addAll(filtradas)
-                        contagemIaOriginal = filtradas.size
-                        carregandoInferencia = false
+        carregandoInferencia = true
+        val (bmp, filtradas) = withContext(Dispatchers.Default) {
+            val bitmap = carregarBitmapDeUri(context, fotoUri)
+            val caixas = if (bitmap != null && detectorHelper != null) {
+                detectorHelper.detectar(bitmap)
+                    .filter { det ->
+                        val score = det.categories.firstOrNull()?.score ?: 0f
+                        score >= (modelConfig.threshold - 0.02f)
                     }
-                })
-                detectorHelper.detect(bmp)
-            } else {
-                carregandoInferencia = false
-            }
+                    .map { it.boundingBox }
+            } else emptyList()
+            bitmap to caixas
         }
+        bitmapFoto = bmp
+        caixasDetectadas.clear()
+        caixasDetectadas.addAll(filtradas)
+        contagemIaOriginal = filtradas.size
+        carregandoInferencia = false
     }
 
     Box(Modifier.fillMaxSize()) {

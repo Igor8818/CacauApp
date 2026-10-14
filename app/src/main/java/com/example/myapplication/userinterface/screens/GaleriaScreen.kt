@@ -157,6 +157,14 @@ fun TelaGaleria(
                                     fontSize = 11.sp,
                                     color = Color.LightGray
                                 )
+                                if (reg.observacao.isNotBlank()) {
+                                    Text(
+                                        "⚠ " + reg.observacao.split("|").filter { it.isNotBlank() }.joinToString(", "),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFFC62828)
+                                    )
+                                }
                             }
                             IconButton(onClick = {
                                 itemEmEdicao = reg

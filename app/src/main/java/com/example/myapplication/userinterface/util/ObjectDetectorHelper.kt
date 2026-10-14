@@ -7,6 +7,7 @@ import android.util.Log
 import com.example.myapplication.data.DetectionCategory
 import com.example.myapplication.data.DetectionResult
 import com.example.myapplication.data.ModelConfig
+import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
@@ -20,9 +21,10 @@ import kotlin.math.roundToInt
  * Helper de detecção TFLite otimizado para inferência YOLO em campo:
  * - Pré-processamento com Letterbox (proporção preservada, preenchimento cinza 114);
  * - Mapeamento reverso preciso de coordenadas para o frame original;
+ * - Suporte a entrada NHWC/NCHW, float32/uint8 e saídas YOLO [4+C,N], [N,4+C] e [N,6] (NMS embutido);
  * - Suporte a GPU Delegate com fallback transparente para CPU;
- * - Reutilização de buffers e matrizes de pixels para reduzir pressão no GC;
- * - Suporte a múltiplos rótulos, NMS por classe e medição de latência.
+ * - Reutilização de buffers para reduzir pressão no GC;
+ * - Inferência serializada (thread-safe): a câmera ao vivo e a revisão da foto nunca competem pelos buffers.
  */
 class ObjectDetectorHelper(
     val context: Context,
@@ -44,15 +46,18 @@ class ObjectDetectorHelper(
     private var gpuDelegate: GpuDelegate? = null
 
     // Metadados do modelo
-    var inputSize   = 640; private set
-    var numAnchors  = 0;   private set
-    var numClasses  = 0;   private set
-    private var transposed  = false
+    @Volatile var inputSize   = 640; private set
+    @Volatile var numAnchors  = 0;   private set
+    @Volatile var numClasses  = 0;   private set
+    @Volatile var formato: FormatoModelo? = null; private set
+    private var layout = LayoutSaida.TRANSPOSTO
+    private var entradaNchw = false
+    private var entradaFloat = true
 
-    var ultimoErro: String? = null; private set
-    var lastBitmapWidth:  Float = 1f; private set
-    var lastBitmapHeight: Float = 1f; private set
-    var ultimaLatenciaMs: Long = 0; private set
+    @Volatile var ultimoErro: String? = null; private set
+    @Volatile var lastBitmapWidth:  Float = 1f; private set
+    @Volatile var lastBitmapHeight: Float = 1f; private set
+    @Volatile var ultimaLatenciaMs: Long = 0; private set
 
     private var loadedPath: String? = null
 
@@ -65,10 +70,7 @@ class ObjectDetectorHelper(
     private var letterboxBitmap: Bitmap? = null
     private var letterboxCanvas: Canvas? = null
     private val paintCinza = Paint().apply { color = Color.rgb(114, 114, 114) }
-
-    // Arrays 3D de saída pré-alocados para evitar milhares de alocações por frame
-    private var outBufferTransposed: Array<Array<FloatArray>>? = null
-    private var outBufferStandard: Array<Array<FloatArray>>? = null
+    private var outBuffer: Array<Array<FloatArray>>? = null
 
     // Estabilização de contagem (mediana dos últimos N frames)
     private val historicoContagens = mutableListOf<Int>()
@@ -80,6 +82,7 @@ class ObjectDetectorHelper(
 
     fun setListener(l: DetectorListener) { detectorListener = l }
 
+    @Synchronized
     fun reloadModel(
         source: ModelSource,
         threshold: Float = scoreThreshold,
@@ -96,6 +99,7 @@ class ObjectDetectorHelper(
         setup()
     }
 
+    @Synchronized
     private fun setup() {
         val file = resolveFile() ?: return
         if (file.absolutePath == loadedPath && interpreter != null) return
@@ -117,50 +121,44 @@ class ObjectDetectorHelper(
                 }
             }
 
-            interpreter = Interpreter(file, options)
+            val interp = Interpreter(file, options)
+            val inTensor = interp.getInputTensor(0)
+            val outTensor = interp.getOutputTensor(0)
 
-            val outShape = interpreter!!.getOutputTensor(0).shape()
-            val inShape  = interpreter!!.getInputTensor(0).shape()
-            Log.d("Detector", "Input: ${inShape.toList()} | Output: ${outShape.toList()}")
-
-            inputSize = if (inShape.size >= 3) inShape[1] else 640
-
-            when {
-                // Formato [1, 4+C, anchors] — YOLOv8 / YOLOv11 (ex: [1, 5, 8400])
-                outShape.size == 3 && outShape[1] in 5..300 && outShape[2] > outShape[1] -> {
-                    transposed  = true
-                    numClasses  = outShape[1] - 4
-                    numAnchors  = outShape[2]
-                    outBufferTransposed = Array(1) { Array(outShape[1]) { FloatArray(numAnchors) } }
-                    outBufferStandard = null
-                }
-                // Formato [1, anchors, 4+C]
-                outShape.size == 3 && outShape[2] in 5..300 && outShape[1] > outShape[2] -> {
-                    transposed  = false
-                    numAnchors  = outShape[1]
-                    numClasses  = outShape[2] - 4
-                    outBufferStandard = Array(1) { Array(numAnchors) { FloatArray(outShape[2]) } }
-                    outBufferTransposed = null
-                }
-                else -> {
-                    transposed  = false
-                    numAnchors  = if (outShape.size >= 2) outShape[1] else 0
-                    numClasses  = if (outShape.size >= 3) outShape[2] - 4 else 1
-                    outBufferStandard = Array(1) { Array(maxOf(numAnchors, 1)) { FloatArray(4 + maxOf(numClasses, 1)) } }
-                    outBufferTransposed = null
-                    Log.w("Detector", "Shape de saida nao convencional: ${outShape.toList()}")
-                }
+            val fmt = try {
+                analisarFormatoModelo(
+                    inShape = inTensor.shape(),
+                    entradaFloat32 = inTensor.dataType() == DataType.FLOAT32,
+                    entradaUint8 = inTensor.dataType() == DataType.UINT8,
+                    outShape = outTensor.shape(),
+                    saidaFloat32 = outTensor.dataType() == DataType.FLOAT32
+                )
+            } catch (e: IllegalArgumentException) {
+                interp.close()
+                throw IllegalStateException(e.message)
             }
 
-            // Aloca buffers de tamanho fixo para o modelo
-            bufferEntrada = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder())
+            interpreter = interp
+            formato = fmt
+            inputSize = fmt.inputSize
+            entradaNchw = fmt.entradaNchw
+            entradaFloat = fmt.entradaFloat
+            layout = fmt.layout
+            numAnchors = fmt.numAnchors
+            numClasses = fmt.numClasses
+
+            val outShape = outTensor.shape()
+            outBuffer = Array(outShape[0]) { Array(outShape[1]) { FloatArray(outShape[2]) } }
+
+            val bytesPorCanal = if (entradaFloat) 4 else 1
+            bufferEntrada = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * bytesPorCanal).order(ByteOrder.nativeOrder())
             pixelsBuffer = IntArray(inputSize * inputSize)
             letterboxBitmap = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
             letterboxCanvas = Canvas(letterboxBitmap!!)
 
             loadedPath = file.absolutePath
             ultimoErro = null
-            Log.d("Detector", "Modelo carregado com sucesso: size=$inputSize, anchors=$numAnchors, classes=$numClasses, transposto=$transposed")
+            Log.d("Detector", "Modelo carregado: ${fmt.descricao()}")
 
         } catch (e: Exception) {
             ultimoErro = "Erro ao carregar modelo: ${e.message?.take(200)}"
@@ -170,24 +168,33 @@ class ObjectDetectorHelper(
     }
 
     /**
-     * Executa a inferência YOLO em uma imagem aplicando letterbox e mapeamento reverso otimizado.
+     * Inferência com entrega via listener (usada pela câmera ao vivo).
      */
     fun detect(image: Bitmap) {
+        val resultados = detectar(image)
+        detectorListener?.onResults(resultados)
+    }
+
+    /**
+     * Inferência síncrona e thread-safe: retorna as detecções em coordenadas do [image] sem
+     * tocar no listener. É a API correta para a revisão da foto, pois não sofre interferência
+     * de quadros da câmera ao vivo (o acesso aos buffers é serializado).
+     */
+    @Synchronized
+    fun detectar(image: Bitmap): List<DetectionResult> {
         val inicio = System.currentTimeMillis()
         lastBitmapWidth  = image.width.toFloat()
         lastBitmapHeight = image.height.toFloat()
 
-        val interp = interpreter ?: run { setup(); interpreter ?: return }
-        if (numAnchors == 0) {
-            detectorListener?.onResults(emptyList())
-            return
-        }
+        val interp = interpreter ?: run { setup(); interpreter ?: return emptyList() }
+        val out = outBuffer ?: return emptyList()
+        if (numAnchors == 0) return emptyList()
 
         try {
             val imgW = image.width.toFloat()
             val imgH = image.height.toFloat()
 
-            // 1. Pré-processamento com Letterbox (proporção exata + preenchimento cinza 114)
+            // 1. Letterbox (proporção exata + preenchimento cinza 114)
             val scale = minOf(inputSize / imgW, inputSize / imgH)
             val scaledW = (imgW * scale).roundToInt()
             val scaledH = (imgH * scale).roundToInt()
@@ -202,120 +209,154 @@ class ObjectDetectorHelper(
             val dstRect = RectF(padX, padY, padX + scaledW, padY + scaledH)
             lbCanvas.drawBitmap(image, srcRect, dstRect, null)
 
-            // 2. Normalização dos pixels [0, 1] no buffer direto via LUT rápida (sem divisão float em loop)
-            val buf = bufferEntrada ?: ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder()).also { bufferEntrada = it }
+            // 2. Normalização para o buffer de entrada (NHWC/NCHW, float32/uint8)
+            val buf = bufferEntrada ?: return emptyList()
             buf.rewind()
-            val pixels = pixelsBuffer ?: IntArray(inputSize * inputSize).also { pixelsBuffer = it }
+            val pixels = pixelsBuffer ?: return emptyList()
             lbBitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+            preencherEntrada(buf, pixels)
+            buf.rewind()
 
-            for (px in pixels) {
-                buf.putFloat(lut255[(px ushr 16) and 0xFF])
-                buf.putFloat(lut255[(px ushr 8) and 0xFF])
-                buf.putFloat(lut255[px and 0xFF])
-            }
-
-            // 3. Execução da inferência reutilizando buffers pré-alocados (zero GC allocation)
-            val out = if (transposed) {
-                outBufferTransposed ?: Array(1) { Array(4 + numClasses) { FloatArray(numAnchors) } }.also { outBufferTransposed = it }
-            } else {
-                outBufferStandard ?: Array(1) { Array(numAnchors) { FloatArray(4 + numClasses) } }.also { outBufferStandard = it }
-            }
+            // 3. Inferência reutilizando buffers pré-alocados
             interp.run(buf, out)
 
-            // 4. Verificação de sistema de coordenadas: pixel (0..inputSize) vs normalizado (0..1)
-            // Checa a âncora central para evitar instabilidades nos cantos
-            val centerIdx = numAnchors / 2
-            val centerCoord = if (transposed) out[0][0][centerIdx] else out[0][centerIdx][0]
-            val isPixelCoord = centerCoord > 1.5f || (if (transposed) out[0][2][centerIdx] else out[0][centerIdx][2]) > 1.5f
+            // 4. Decodificação -> candidatos em coordenadas do bitmap original
+            val candidatos = ArrayList<FloatArray>(64)
+            decodificar(out, scale, padX, padY, imgW, imgH, candidatos)
 
-            // 5. Decodificação de candidatos com mapeamento reverso retirando o letterbox
-            val candidates = ArrayList<FloatArray>(64)
-            val maxClasses = maxOf(numClasses, 1)
+            // 5. NMS e conversão
+            val selecionados = if (layout == LayoutSaida.END_TO_END) {
+                candidatos.sortedByDescending { it[4] }
+            } else {
+                nms(candidatos)
+            }.take(maxResults)
 
-            for (i in 0 until numAnchors) {
-                val cx: Float
-                val cy: Float
-                val w: Float
-                val h: Float
-                var bestScore = -Float.MAX_VALUE
-                var bestClass = 0
-
-                if (transposed) {
-                    val rawCx = out[0][0][i]
-                    val rawCy = out[0][1][i]
-                    val rawW  = out[0][2][i]
-                    val rawH  = out[0][3][i]
-                    cx = if (isPixelCoord) rawCx else rawCx * inputSize
-                    cy = if (isPixelCoord) rawCy else rawCy * inputSize
-                    w  = if (isPixelCoord) rawW  else rawW  * inputSize
-                    h  = if (isPixelCoord) rawH  else rawH  * inputSize
-
-                    for (c in 0 until maxClasses) {
-                        val s = out[0][4 + c][i]
-                        if (s > bestScore) { bestScore = s; bestClass = c }
-                    }
-                } else {
-                    val rawCx = out[0][i][0]
-                    val rawCy = out[0][i][1]
-                    val rawW  = out[0][i][2]
-                    val rawH  = out[0][i][3]
-                    cx = if (isPixelCoord) rawCx else rawCx * inputSize
-                    cy = if (isPixelCoord) rawCy else rawCy * inputSize
-                    w  = if (isPixelCoord) rawW  else rawW  * inputSize
-                    h  = if (isPixelCoord) rawH  else rawH  * inputSize
-
-                    for (c in 0 until maxClasses) {
-                        val s = out[0][i][4 + c]
-                        if (s > bestScore) { bestScore = s; bestClass = c }
-                    }
-                }
-
-                // O modelo YOLOv8 já tem ativação Sigmoid na saída; apenas aplica caso seja logit puro
-                val prob = if (bestScore < -0.05f || bestScore > 1.05f) sigmoid(bestScore) else bestScore.coerceIn(0f, 1f)
-
-                // Filtro preliminar: score >= threshold e tamanho mínimo de fruto
-                if (prob >= scoreThreshold && w > 4f && h > 4f) {
-                    // Mapeamento reverso do letterbox -> coordenadas originais do bitmap
-                    val origCx = (cx - padX) / scale
-                    val origCy = (cy - padY) / scale
-                    val origW  = w / scale
-                    val origH  = h / scale
-
-                    val left   = (origCx - origW / 2f).coerceIn(0f, imgW)
-                    val top    = (origCy - origH / 2f).coerceIn(0f, imgH)
-                    val right  = (origCx + origW / 2f).coerceIn(0f, imgW)
-                    val bottom = (origCy + origH / 2f).coerceIn(0f, imgH)
-
-                    if ((right - left) >= 4f && (bottom - top) >= 4f) {
-                        candidates.add(floatArrayOf(left, top, right, bottom, prob, bestClass.toFloat()))
-                    }
-                }
-            }
-
-            // 6. NMS e conversão para DetectionResult
-            val selecionados = nms(candidates).take(maxResults)
-            val detections = selecionados.map { box ->
+            val deteccoes = selecionados.map { box ->
                 val rect = RectF(box[0], box[1], box[2], box[3])
                 val classIdx = box[5].toInt()
-                val labelNome = labelsModelo.getOrNull(classIdx) ?: "cacau"
+                val labelNome = labelsModelo.getOrNull(classIdx)
+                    ?: if (numClasses <= 1) "cacau" else "classe_$classIdx"
                 DetectionResult.create(
                     rect,
                     listOf(DetectionCategory.create(labelNome, labelNome, box[4]))
                 )
             }
 
-            // Estabilização de contagem (mediana temporal)
             synchronized(historicoContagens) {
-                historicoContagens.add(detections.size)
+                historicoContagens.add(deteccoes.size)
                 if (historicoContagens.size > janelaMediana) historicoContagens.removeAt(0)
             }
 
             ultimaLatenciaMs = System.currentTimeMillis() - inicio
-            detectorListener?.onResults(detections)
+            return deteccoes
 
         } catch (e: Exception) {
             Log.e("Detector", "Erro durante deteccao: ${e.message}")
-            detectorListener?.onResults(emptyList())
+            return emptyList()
+        }
+    }
+
+    private fun preencherEntrada(buf: ByteBuffer, pixels: IntArray) {
+        val plano = inputSize * inputSize
+        if (entradaFloat) {
+            if (!entradaNchw) {
+                for (px in pixels) {
+                    buf.putFloat(lut255[(px ushr 16) and 0xFF])
+                    buf.putFloat(lut255[(px ushr 8) and 0xFF])
+                    buf.putFloat(lut255[px and 0xFF])
+                }
+            } else {
+                val fb = buf.asFloatBuffer()
+                for (i in 0 until plano) {
+                    val px = pixels[i]
+                    fb.put(i, lut255[(px ushr 16) and 0xFF])
+                    fb.put(plano + i, lut255[(px ushr 8) and 0xFF])
+                    fb.put(2 * plano + i, lut255[px and 0xFF])
+                }
+            }
+        } else {
+            if (!entradaNchw) {
+                for (px in pixels) {
+                    buf.put(((px ushr 16) and 0xFF).toByte())
+                    buf.put(((px ushr 8) and 0xFF).toByte())
+                    buf.put((px and 0xFF).toByte())
+                }
+            } else {
+                for (i in 0 until plano) {
+                    val px = pixels[i]
+                    buf.put(i, ((px ushr 16) and 0xFF).toByte())
+                    buf.put(plano + i, ((px ushr 8) and 0xFF).toByte())
+                    buf.put(2 * plano + i, (px and 0xFF).toByte())
+                }
+            }
+        }
+    }
+
+    /** Converte a saída bruta do modelo em caixas (l, t, r, b, score, classe) no espaço do bitmap. */
+    private fun decodificar(
+        out: Array<Array<FloatArray>>,
+        scale: Float, padX: Float, padY: Float,
+        imgW: Float, imgH: Float,
+        destino: MutableList<FloatArray>
+    ) {
+        val tam = inputSize.toFloat()
+
+        // Detecta se as coordenadas estão em pixels (0..tam) ou normalizadas (0..1)
+        var maxRef = 0f
+        when (layout) {
+            LayoutSaida.TRANSPOSTO -> for (i in 0 until numAnchors) maxRef = maxOf(maxRef, out[0][2][i])
+            LayoutSaida.PADRAO     -> for (i in 0 until numAnchors) maxRef = maxOf(maxRef, out[0][i][2])
+            LayoutSaida.END_TO_END -> for (i in 0 until numAnchors) maxRef = maxOf(maxRef, out[0][i][2], out[0][i][3])
+        }
+        val fator = if (maxRef > 1.5f) 1f else tam
+
+        for (i in 0 until numAnchors) {
+            var l: Float; var t: Float; var r: Float; var b: Float
+            var melhorScore = -Float.MAX_VALUE
+            var melhorClasse = 0
+
+            when (layout) {
+                LayoutSaida.END_TO_END -> {
+                    val row = out[0][i]
+                    melhorScore = row[4]
+                    melhorClasse = row[5].roundToInt()
+                    l = row[0] * fator; t = row[1] * fator; r = row[2] * fator; b = row[3] * fator
+                }
+                else -> {
+                    val cx: Float; val cy: Float; val w: Float; val h: Float
+                    if (layout == LayoutSaida.TRANSPOSTO) {
+                        cx = out[0][0][i] * fator; cy = out[0][1][i] * fator
+                        w = out[0][2][i] * fator;  h = out[0][3][i] * fator
+                        for (c in 0 until numClasses) {
+                            val s = out[0][4 + c][i]
+                            if (s > melhorScore) { melhorScore = s; melhorClasse = c }
+                        }
+                    } else {
+                        val row = out[0][i]
+                        cx = row[0] * fator; cy = row[1] * fator
+                        w = row[2] * fator;  h = row[3] * fator
+                        for (c in 0 until numClasses) {
+                            val s = row[4 + c]
+                            if (s > melhorScore) { melhorScore = s; melhorClasse = c }
+                        }
+                    }
+                    l = cx - w / 2f; t = cy - h / 2f; r = cx + w / 2f; b = cy + h / 2f
+                }
+            }
+
+            // Modelos exportados com sigmoid já embutido entregam [0,1]; só aplica sigmoid se vier logit.
+            val prob = if (melhorScore < -0.05f || melhorScore > 1.05f) sigmoid(melhorScore) else melhorScore.coerceIn(0f, 1f)
+            if (prob < scoreThreshold) continue
+
+            // Mapeamento reverso do letterbox -> coordenadas do bitmap original
+            val left   = ((l - padX) / scale).coerceIn(0f, imgW)
+            val top    = ((t - padY) / scale).coerceIn(0f, imgH)
+            val right  = ((r - padX) / scale).coerceIn(0f, imgW)
+            val bottom = ((b - padY) / scale).coerceIn(0f, imgH)
+
+            if ((right - left) >= 4f && (bottom - top) >= 4f) {
+                destino.add(floatArrayOf(left, top, right, bottom, prob, melhorClasse.toFloat()))
+            }
         }
     }
 
@@ -334,7 +375,8 @@ class ObjectDetectorHelper(
         while (sorted.isNotEmpty()) {
             val best = sorted.removeAt(0)
             result.add(best)
-            sorted.removeAll { iouCorners(best, it) > iouThresh }
+            // NMS por classe: só suprime caixas da mesma classe
+            sorted.removeAll { it[5] == best[5] && iouCorners(best, it) > iouThresh }
         }
         return result
     }
@@ -374,19 +416,26 @@ class ObjectDetectorHelper(
             detectorListener?.onError(ultimoErro!!); null
         }
         is ModelSource.External -> try {
-            File(context.cacheDir, "custom_model_cache.tflite").also { f ->
-                context.contentResolver.openInputStream(s.uri)?.use { i ->
-                    FileOutputStream(f).use { i.copyTo(it) }
+            // Modelos importados ficam em filesDir (file://): usa direto, sem recopiar dezenas de MB a cada abertura.
+            val direto = if (s.uri.scheme == "file") s.uri.path?.let { File(it) } else null
+            if (direto != null && direto.exists() && direto.length() > 0L) {
+                direto
+            } else {
+                File(context.cacheDir, "custom_model_cache.tflite").also { f ->
+                    val entrada = context.contentResolver.openInputStream(s.uri)
+                        ?: throw IllegalStateException("Sem acesso ao modelo")
+                    entrada.use { i -> FileOutputStream(f).use { i.copyTo(it) } }
                 }
             }
         } catch (e: Exception) {
-            ultimoErro = "Nao foi possivel acessar o modelo externo."
+            ultimoErro = "Nao foi possivel acessar o modelo externo. Importe novamente."
             detectorListener?.onError(ultimoErro!!); null
         }
     }
 
     fun fechar() = close()
 
+    @Synchronized
     private fun close() {
         try {
             interpreter?.close()

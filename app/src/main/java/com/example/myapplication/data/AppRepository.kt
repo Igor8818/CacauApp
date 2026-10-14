@@ -88,6 +88,8 @@ class AppRepository(private val context: Context) {
                 put("precisaoGpsM", reg.precisaoGpsM.toDouble())
                 put("altitude", reg.altitude)
                 put("versaoApp", reg.versaoApp)
+                put("observacao", reg.observacao)
+                put("timestampMs", reg.timestampMs)
             }
             jsonArray.put(obj)
         }
@@ -124,7 +126,9 @@ class AppRepository(private val context: Context) {
                         fazenda = obj.optString("fazenda", ""),
                         precisaoGpsM = obj.optDouble("precisaoGpsM", 0.0).toFloat(),
                         altitude = obj.optDouble("altitude", 0.0),
-                        versaoApp = obj.optString("versaoApp", "1.0")
+                        versaoApp = obj.optString("versaoApp", "1.0"),
+                        observacao = obj.optString("observacao", ""),
+                        timestampMs = obj.optLong("timestampMs", 0L)
                     )
                 )
             }
@@ -149,6 +153,7 @@ class AppRepository(private val context: Context) {
                 put("planta", r.planta)
                 put("coletado", r.coletado)
                 put("qtdFrutos", r.qtdFrutos)
+                put("observacao", r.observacao)
             }
             jsonArray.put(obj)
         }
@@ -168,7 +173,8 @@ class AppRepository(private val context: Context) {
                         parcela = obj.optString("parcela", "1"),
                         planta = obj.optInt("planta", 1),
                         coletado = obj.optBoolean("coletado", false),
-                        qtdFrutos = obj.optString("qtdFrutos", "0")
+                        qtdFrutos = obj.optString("qtdFrutos", "0"),
+                        observacao = obj.optString("observacao", "")
                     )
                 )
             }
