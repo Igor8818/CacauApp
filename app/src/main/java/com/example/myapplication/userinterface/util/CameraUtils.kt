@@ -22,8 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myapplication.data.DetectionResult
-import java.io.InputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -32,8 +32,9 @@ private val inferenceExecutor = Executors.newSingleThreadExecutor()
 /**
  * Visualizador de câmera com CameraX e inferência de IA desacoplada da UI:
  * - Aplica rotationDegrees aos frames antes da inferência para garantir caixas alinhadas;
- * - Suporta toque para focar e pinch-to-zoom nativo na tela do operador;
- * - Throttling adaptativo para prevenir acúmulo de frames na fila.
+ * - Foco e fotometria (AF/AE/AWB) automáticos priorizando o tronco no centro do quadro;
+ * - Suporta toque para focar/expor e pinch-to-zoom nativo na tela do operador;
+ * - Throttling adaptativo (~5.5 FPS) para alimentar o rastreamento temporal suave.
  */
 @Composable
 fun CameraWithAI(
@@ -67,7 +68,7 @@ fun CameraWithAI(
 
             val inferenceRunning = AtomicBoolean(false)
             val lastInferenceMs = AtomicLong(0L)
-            val minIntervalMs = 300L // 3.3 FPS: fluido e termicamente eficiente
+            val minIntervalMs = 180L // ~5.5 FPS: resposta rápida com rastreamento temporal suave
 
             helper.setListener(object : ObjectDetectorHelper.DetectorListener {
                 override fun onResults(results: List<DetectionResult>) {
@@ -133,10 +134,23 @@ fun CameraWithAI(
                         preview, capture, analyzer
                     )
 
-                    // Configura zoom por pinça e foco por toque
+                    // Configura zoom por pinça, fotometria automática no centro (tronco) e foco/exposição por toque
                     val cameraControl = camera.cameraControl
                     val cameraInfo = camera.cameraInfo
                     onCameraControlPronto?.invoke(cameraControl, cameraInfo)
+
+                    view.post {
+                        try {
+                            if (view.width > 0 && view.height > 0) {
+                                val centerPoint = view.meteringPointFactory.createPoint(view.width / 2f, view.height / 2f, 0.25f)
+                                val centerAction = FocusMeteringAction.Builder(
+                                    centerPoint,
+                                    FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
+                                ).setAutoCancelDuration(4, TimeUnit.SECONDS).build()
+                                cameraControl.startFocusAndMetering(centerAction)
+                            }
+                        } catch (_: Exception) {}
+                    }
 
                     val scaleGestureDetector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                         override fun onScale(detector: ScaleGestureDetector): Boolean {
@@ -149,10 +163,13 @@ fun CameraWithAI(
 
                     view.setOnTouchListener { _, event ->
                         scaleGestureDetector.onTouchEvent(event)
-                        if (event.action == android.view.MotionEvent.ACTION_UP) {
+                        if (event.action == android.view.MotionEvent.ACTION_UP && !scaleGestureDetector.isInProgress) {
                             val factory = view.meteringPointFactory
-                            val point = factory.createPoint(event.x, event.y)
-                            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build()
+                            val point = factory.createPoint(event.x, event.y, 0.22f)
+                            val action = FocusMeteringAction.Builder(
+                                point,
+                                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
+                            ).setAutoCancelDuration(5, TimeUnit.SECONDS).build()
                             cameraControl.startFocusAndMetering(action)
                         }
                         true

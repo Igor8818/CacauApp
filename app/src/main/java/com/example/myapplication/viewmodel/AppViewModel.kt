@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myapplication.data.*
 import com.example.myapplication.userinterface.util.assetModeloExiste
+import com.example.myapplication.userinterface.util.cloneDoPlantId
 import com.google.android.gms.location.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -111,8 +112,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _temFixGps = MutableStateFlow(false)
     val temFixGps: StateFlow<Boolean> = _temFixGps.asStateFlow()
 
-    // ── Histórico para Desfazer Exclusão (Undo) ──────────────────────────────
+    // ── Histórico para Desfazer Exclusão / Salvo Rápido (Undo) ───────────────
     private var ultimoRegistroExcluido: Pair<Int, RegistroCacau>? = null
+    private var backupAntesDeSalvarLivre: Triple<String, RegistroCacau?, Int>? = null
 
     init {
         carregarDadosPersistidos()
@@ -141,7 +143,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _valorNum2.value = v2
             _valorNum3.value = v3
 
-            // Carrega modelo salvo com verificação de arquivo existente
             val salvo = repository.carregarModelConfig()
             if (salvo.modeloSelecionado != null && !assetModeloExiste(getApplication(), salvo.modeloSelecionado.nomeArquivo)) {
                 _modelConfig.value = salvo.copy(modeloSelecionado = null)
@@ -154,10 +155,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Operações de Registros ────────────────────────────────────────────────
 
-    fun salvarRegistro(novo: RegistroCacau) {
+    fun salvarRegistro(novo: RegistroCacau, incrementarPlantaManual: Boolean = true) {
         val listaAtual = _registros.value.toMutableList()
-        // Substitui se já existir mesmo plantId na sessão (evita duplicidade inconsistente)
         val idx = listaAtual.indexOfFirst { it.plantId == novo.plantId }
+        val regAnterior = if (idx >= 0) listaAtual[idx] else null
+        val plantaAnterior = _valorNum3.value
+
+        if (incrementarPlantaManual) {
+            backupAntesDeSalvarLivre = Triple(novo.plantId, regAnterior, plantaAnterior)
+        }
+
         if (idx >= 0) {
             listaAtual[idx] = novo
         } else {
@@ -165,25 +172,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         _registros.value = listaAtual
 
-        // Incrementa automaticamente o contador de planta se numérico
-        if (_isNum3.value) {
+        if (incrementarPlantaManual && _isNum3.value) {
             _valorNum3.value = _valorNum3.value + 1
+            salvarEstadoSessao()
         }
 
-        // Adiciona clone ao histórico se inédito
-        if (novo.plantId.isNotBlank()) {
-            val cloneNome = novo.plantId.split("_").firstOrNull() ?: ""
-            if (cloneNome.isNotBlank() && !_historicoClones.value.contains(cloneNome)) {
-                val novoHist = _historicoClones.value + cloneNome
-                _historicoClones.value = novoHist
-                salvarEstadoSessao()
-            }
+        val cloneNome = novo.cloneExplicito.ifBlank { cloneDoPlantId(novo.plantId) }
+        if (cloneNome.isNotBlank() && !_historicoClones.value.contains(cloneNome)) {
+            val novoHist = _historicoClones.value + cloneNome
+            _historicoClones.value = novoHist
+            salvarEstadoSessao()
         }
 
-        // Autosave atômico em background
         viewModelScope.launch(Dispatchers.IO) {
             repository.salvarRegistros(listaAtual)
         }
+    }
+
+    fun desfazerUltimoSalvoLivre(): Boolean {
+        val backup = backupAntesDeSalvarLivre ?: return false
+        val (plantIdSalvo, regAnterior, plantaAnterior) = backup
+        val listaAtual = _registros.value.toMutableList()
+        val idx = listaAtual.indexOfFirst { it.plantId == plantIdSalvo }
+        if (regAnterior != null) {
+            if (idx >= 0) listaAtual[idx] = regAnterior else listaAtual.add(regAnterior)
+        } else if (idx >= 0) {
+            listaAtual.removeAt(idx)
+        }
+        _registros.value = listaAtual
+        if (_isNum3.value) {
+            _valorNum3.value = plantaAnterior.coerceAtLeast(1)
+            salvarEstadoSessao()
+        }
+        backupAntesDeSalvarLivre = null
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.salvarRegistros(listaAtual)
+        }
+        return true
     }
 
     fun editarContagemRegistro(plantId: String, novaContagem: String) {
@@ -191,11 +216,56 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val idx = listaAtual.indexOfFirst { it.plantId == plantId }
         if (idx >= 0) {
             val reg = listaAtual[idx]
-            val novoInt = novaContagem.toIntOrNull() ?: reg.contagemIa
-            listaAtual[idx] = reg.copy(diagnostico = novaContagem, contagemFinal = novoInt)
+            val inativa = SituacaoPlanta.ehInativa(novaContagem)
+            val novoInt = if (inativa) 0 else (novaContagem.toIntOrNull() ?: reg.contagemIa)
+            val novoSitPla = if (inativa) novaContagem else "Normal"
+            val atualizado = reg.copy(
+                diagnostico = novaContagem,
+                contagemFinal = novoInt,
+                sitPla = novoSitPla
+            )
+            listaAtual[idx] = atualizado
             _registros.value = listaAtual
             viewModelScope.launch(Dispatchers.IO) {
                 repository.salvarRegistros(listaAtual)
+            }
+        }
+    }
+
+    fun atualizarRegistroCompleto(atualizado: RegistroCacau) {
+        val listaAtual = _registros.value.toMutableList()
+        val idx = listaAtual.indexOfFirst { it.plantId == atualizado.plantId }
+        if (idx >= 0) {
+            listaAtual[idx] = atualizado
+            _registros.value = listaAtual
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.salvarRegistros(listaAtual)
+            }
+        }
+        // Sincroniza também na rota caso faça parte dela
+        val rotaAtual = _rota.value.toMutableList()
+        val idxRota = rotaAtual.indexOfFirst { it.idEfetivo == atualizado.plantId }
+        if (idxRota >= 0) {
+            val p = rotaAtual[idxRota]
+            rotaAtual[idxRota] = p.copy(
+                coletado = true,
+                qtdFrutos = atualizado.diagnostico,
+                observacao = atualizado.observacao,
+                sitPla = atualizado.sitPla,
+                nfPequenos = atualizado.nfPequenos,
+                nfMedios = atualizado.nfMedios,
+                nfAdultos = atualizado.nfAdultos,
+                nfMaduros = atualizado.nfMaduros,
+                nfVassoura = atualizado.nfVassoura,
+                nfPodridao = atualizado.nfPodridao,
+                nfOutrasPerdas = atualizado.nfOutrasPerdas,
+                nvTotal = atualizado.nvTotal,
+                corFruto = atualizado.corFruto,
+                notaVirus = atualizado.notaVirus
+            )
+            _rota.value = rotaAtual
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.salvarRota(rotaAtual)
             }
         }
     }
@@ -235,6 +305,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun carregarRota(novaLista: List<RotaColeta>) {
         _rota.value = novaLista
+        // Se a planilha carregada já traz o nome do Ensaio (ex: TC-1801), sincroniza caso necessário
+        val ensaioPlanilha = novaLista.firstOrNull { it.ensaio.isNotBlank() }?.ensaio
+        if (!ensaioPlanilha.isNullOrBlank() && _ensaioNome.value.isBlank()) {
+            _ensaioNome.value = ensaioPlanilha
+            salvarEstadoSessao()
+        }
         viewModelScope.launch(Dispatchers.IO) {
             repository.salvarRota(novaLista)
         }
@@ -244,17 +320,64 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         pontoOriginal: RotaColeta,
         coletado: Boolean,
         qtdFrutos: String,
-        observacao: String = pontoOriginal.observacao
+        observacao: String = pontoOriginal.observacao,
+        sitPla: String = if (SituacaoPlanta.ehInativa(qtdFrutos)) qtdFrutos else "Normal",
+        nfPequenos: Int = pontoOriginal.nfPequenos,
+        nfMedios: Int = pontoOriginal.nfMedios,
+        nfAdultos: Int = pontoOriginal.nfAdultos,
+        nfMaduros: Int = pontoOriginal.nfMaduros,
+        nfVassoura: Int = pontoOriginal.nfVassoura,
+        nfPodridao: Int = pontoOriginal.nfPodridao,
+        nfOutrasPerdas: Int = pontoOriginal.nfOutrasPerdas,
+        nvTotal: Int = pontoOriginal.nvTotal,
+        corFruto: String = pontoOriginal.corFruto,
+        notaVirus: Int = pontoOriginal.notaVirus
     ) {
         val listaAtual = _rota.value.toMutableList()
         val idx = listaAtual.indexOfFirst {
-            it.clone == pontoOriginal.clone && it.parcela == pontoOriginal.parcela && it.planta == pontoOriginal.planta
+            (it.plantIdOriginal.isNotBlank() && it.plantIdOriginal == pontoOriginal.plantIdOriginal) ||
+                (it.clone == pontoOriginal.clone && it.parcela == pontoOriginal.parcela && it.planta == pontoOriginal.planta && it.bloco == pontoOriginal.bloco)
         }
         if (idx >= 0) {
-            listaAtual[idx] = pontoOriginal.copy(coletado = coletado, qtdFrutos = qtdFrutos, observacao = observacao)
+            listaAtual[idx] = pontoOriginal.copy(
+                coletado = coletado,
+                qtdFrutos = qtdFrutos,
+                observacao = observacao,
+                sitPla = sitPla,
+                nfPequenos = nfPequenos,
+                nfMedios = nfMedios,
+                nfAdultos = nfAdultos,
+                nfMaduros = nfMaduros,
+                nfVassoura = nfVassoura,
+                nfPodridao = nfPodridao,
+                nfOutrasPerdas = nfOutrasPerdas,
+                nvTotal = nvTotal,
+                corFruto = corFruto,
+                notaVirus = notaVirus
+            )
             _rota.value = listaAtual
             viewModelScope.launch(Dispatchers.IO) {
                 repository.salvarRota(listaAtual)
+            }
+        }
+    }
+
+    fun restaurarPontoRota(pontoAnterior: RotaColeta, removerRegistroSeInedito: Boolean) {
+        val listaRota = _rota.value.toMutableList()
+        val idx = listaRota.indexOfFirst { it.idEfetivo == pontoAnterior.idEfetivo }
+        if (idx >= 0) {
+            listaRota[idx] = pontoAnterior
+            _rota.value = listaRota
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.salvarRota(listaRota)
+            }
+        }
+        if (removerRegistroSeInedito) {
+            val regs = _registros.value.toMutableList()
+            regs.removeAll { it.plantId == pontoAnterior.idEfetivo }
+            _registros.value = regs
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.salvarRegistros(regs)
             }
         }
     }
@@ -277,7 +400,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Gerenciamento de Sessão / Campanha ─────────────────────────────────────
 
-    fun iniciarNovoEnsaio(nome: String, operador: String = "", fazenda: String = "") {
+    fun iniciarNovoEnsaio(nome: String, operador: String = _operador.value, fazenda: String = _fazenda.value) {
         _ensaioNome.value = nome
         _operador.value = operador
         _fazenda.value = fazenda
@@ -325,11 +448,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setValor1(v: String) { _valor1.value = v }
-    fun setValorNum2(v: Int) { 
+    fun setValorNum2(v: Int) {
         _valorNum2.value = v.coerceAtLeast(1)
         salvarEstadoSessao()
     }
-    fun setValorNum3(v: Int) { 
+    fun setValorNum3(v: Int) {
         _valorNum3.value = v.coerceAtLeast(1)
         salvarEstadoSessao()
     }
@@ -345,6 +468,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setValorTxt3(v: String) { _valorTxt3.value = v }
     fun setConfigConcluida(v: Boolean) { _configConcluida.value = v; salvarEstadoSessao() }
     fun setEnsaioNome(v: String) { _ensaioNome.value = v }
+    fun setOperador(v: String) { _operador.value = v }
+    fun setFazenda(v: String) { _fazenda.value = v }
 
     // ── Gerenciamento do Ciclo de Vida do GPS ─────────────────────────────────
 
@@ -365,7 +490,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         try {
             fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
-            // Tenta obter última localização imediatamente
             fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                 if (loc != null) atualizarLocalizacao(loc)
             }

@@ -8,39 +8,223 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Xml
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.example.myapplication.data.OcorrenciaCampo
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.data.RotaColeta
+import com.example.myapplication.data.SituacaoPlanta
+import com.example.myapplication.data.comoObservacao
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.tensorflow.lite.DataType
+import org.tensorflow.lite.Interpreter
+import org.xmlpull.v1.XmlPullParser
 import java.io.*
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import org.tensorflow.lite.DataType
-import org.tensorflow.lite.Interpreter
+import java.util.zip.ZipInputStream
 
 /**
- * Lê apenas a primeira linha (cabeçalho) de um arquivo CSV/Excel apontado por [uri].
- * Utiliza o parser RFC 4180 com autodetecção de delimitador.
+ * Lê todas as linhas de uma planilha CSV ou Excel (.xlsx) apontada por [uri].
+ * Se o arquivo for um .xlsx (formato ZIP OpenXML do Excel), extrai automaticamente
+ * as strings compartilhadas e a aba de dados sem precisar converter para CSV.
+ */
+fun lerLinhasPlanilha(context: Context, uri: Uri): List<String> {
+    return try {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return emptyList()
+        if (bytes.size >= 4 &&
+            bytes[0] == 0x50.toByte() &&
+            bytes[1] == 0x4B.toByte() &&
+            bytes[2] == 0x03.toByte() &&
+            bytes[3] == 0x04.toByte()
+        ) {
+            extrairLinhasDeXlsx(bytes)
+        } else {
+            BufferedReader(InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8)).use { it.readLines() }
+        }
+    } catch (e: Exception) {
+        Log.e("FileUtils", "Erro ao ler planilha: ${e.message}")
+        emptyList()
+    }
+}
+
+/**
+ * Extrai as linhas da planilha Excel (.xlsx) convertendo cada linha em formato delimitado por ';'.
+ * Prioriza a aba que contiver colunas "Clone"/"Parcela"/"Planta", ou usa a primeira aba.
+ */
+private fun extrairLinhasDeXlsx(xlsxBytes: ByteArray): List<String> {
+    val sharedStrings = mutableListOf<String>()
+    val sheetsBytes = sortedMapOf<String, ByteArray>()
+
+    ZipInputStream(ByteArrayInputStream(xlsxBytes)).use { zis ->
+        while (true) {
+            val entry = zis.nextEntry ?: break
+            val name = entry.name
+            when {
+                name.equals("xl/sharedStrings.xml", ignoreCase = true) -> {
+                    val xmlBytes = zis.readBytes()
+                    sharedStrings.addAll(parseSharedStringsXml(xmlBytes))
+                }
+                name.startsWith("xl/worksheets/sheet", ignoreCase = true) && name.endsWith(".xml", ignoreCase = true) -> {
+                    sheetsBytes[name] = zis.readBytes()
+                }
+            }
+            zis.closeEntry()
+        }
+    }
+
+    if (sheetsBytes.isEmpty()) return emptyList()
+
+    var melhorAba: List<String> = emptyList()
+    for ((_, sheetXml) in sheetsBytes) {
+        val linhas = parseWorksheetXmlParaCsv(sheetXml, sharedStrings)
+        if (linhas.isNotEmpty()) {
+            val cab = linhas.first().lowercase()
+            if (cab.contains("clone") && (cab.contains("parcela") || cab.contains("planta"))) {
+                return linhas
+            }
+            if (melhorAba.isEmpty()) {
+                melhorAba = linhas
+            }
+        }
+    }
+    return melhorAba
+}
+
+private fun parseSharedStringsXml(xmlBytes: ByteArray): List<String> {
+    val resultado = mutableListOf<String>()
+    val parser = Xml.newPullParser()
+    parser.setInput(ByteArrayInputStream(xmlBytes), "UTF-8")
+    var dentroSi = false
+    var dentroT = false
+    val sb = StringBuilder()
+
+    var event = parser.eventType
+    while (event != XmlPullParser.END_DOCUMENT) {
+        when (event) {
+            XmlPullParser.START_TAG -> {
+                if (parser.name == "si") {
+                    dentroSi = true
+                    sb.setLength(0)
+                } else if (dentroSi && parser.name == "t") {
+                    dentroT = true
+                }
+            }
+            XmlPullParser.TEXT -> {
+                if (dentroSi && dentroT) {
+                    sb.append(parser.text ?: "")
+                }
+            }
+            XmlPullParser.END_TAG -> {
+                if (parser.name == "t") {
+                    dentroT = false
+                } else if (parser.name == "si") {
+                    resultado.add(sb.toString())
+                    dentroSi = false
+                }
+            }
+        }
+        event = parser.next()
+    }
+    return resultado
+}
+
+private fun parseWorksheetXmlParaCsv(xmlBytes: ByteArray, sharedStrings: List<String>): List<String> {
+    val linhas = mutableListOf<String>()
+    val parser = Xml.newPullParser()
+    parser.setInput(ByteArrayInputStream(xmlBytes), "UTF-8")
+
+    var celulasLinha = mutableListOf<String>()
+    var colIdxAtual = 0
+    var tipoCelula = ""
+    var dentroValor = false
+    val valorCelula = StringBuilder()
+
+    var event = parser.eventType
+    while (event != XmlPullParser.END_DOCUMENT) {
+        when (event) {
+            XmlPullParser.START_TAG -> {
+                when (parser.name) {
+                    "row" -> {
+                        celulasLinha = mutableListOf()
+                        colIdxAtual = 0
+                    }
+                    "c" -> {
+                        val ref = parser.getAttributeValue(null, "r") ?: ""
+                        tipoCelula = parser.getAttributeValue(null, "t") ?: ""
+                        colIdxAtual = indiceColunaExcel(ref, celulasLinha.size)
+                        valorCelula.setLength(0)
+                    }
+                    "v", "t" -> {
+                        dentroValor = true
+                    }
+                }
+            }
+            XmlPullParser.TEXT -> {
+                if (dentroValor) {
+                    valorCelula.append(parser.text ?: "")
+                }
+            }
+            XmlPullParser.END_TAG -> {
+                when (parser.name) {
+                    "v", "t" -> dentroValor = false
+                    "c" -> {
+                        while (celulasLinha.size <= colIdxAtual) {
+                            celulasLinha.add("")
+                        }
+                        val bruto = valorCelula.toString().trim()
+                        val resolvido = if (tipoCelula == "s") {
+                            val idx = bruto.toIntOrNull()
+                            if (idx != null && idx in sharedStrings.indices) sharedStrings[idx] else bruto
+                        } else {
+                            bruto
+                        }
+                        celulasLinha[colIdxAtual] = resolvido
+                    }
+                    "row" -> {
+                        if (celulasLinha.any { it.isNotBlank() }) {
+                            linhas.add(celulasLinha.joinToString(";") { escaparECorrigirCsv(it, ";") })
+                        }
+                    }
+                }
+            }
+        }
+        event = parser.next()
+    }
+    return linhas
+}
+
+private fun indiceColunaExcel(ref: String, fallback: Int): Int {
+    val letras = ref.takeWhile { it.isLetter() }.uppercase()
+    if (letras.isEmpty()) return fallback
+    var idx = 0
+    for (c in letras) {
+        idx = idx * 26 + (c - 'A' + 1)
+    }
+    return (idx - 1).coerceAtLeast(0)
+}
+
+/**
+ * Lê apenas a primeira linha (cabeçalho) de um arquivo CSV ou Excel (.xlsx) apontado por [uri].
  */
 fun lerApenasCabecalho(context: Context, uri: Uri): List<String> {
     try {
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            BufferedReader(InputStreamReader(inputStream, StandardCharsets.UTF_8)).use { reader ->
-                val primeiraLinha = reader.readLine() ?: return emptyList()
-                val linhaLimpa = limparBomECaracteresInvalidos(primeiraLinha)
-                val separador = detectarSeparador(linhaLimpa)
-                return parseLinhaCsvRfc4180(linhaLimpa, separador).map { it.trim() }.filter { it.isNotEmpty() }
-            }
-        }
+        val linhas = lerLinhasPlanilha(context, uri)
+        val primeiraLinha = linhas.firstOrNull() ?: return emptyList()
+        val linhaLimpa = limparBomECaracteresInvalidos(primeiraLinha)
+        val separador = detectarSeparador(linhaLimpa)
+        return parseLinhaCsvRfc4180(linhaLimpa, separador)
+            .mapIndexed { idx, col -> col.trim().ifEmpty { "Coluna_${idx + 1}" } }
     } catch (e: Exception) {
         Log.e("FileUtils", "Erro ao ler cabecalho: ${e.message}")
     }
@@ -48,7 +232,7 @@ fun lerApenasCabecalho(context: Context, uri: Uri): List<String> {
 }
 
 /**
- * Processa um CSV completo e retorna lista de [RotaColeta]
+ * Processa uma planilha CSV ou Excel (.xlsx) completa e retorna lista de [RotaColeta]
  * usando os índices de coluna já resolvidos ([idxClone], [idxParcela], [idxPlanta]).
  */
 fun processarCSVComIndices(
@@ -58,40 +242,158 @@ fun processarCSVComIndices(
     idxParcela: Int,
     idxPlanta: Int
 ): List<RotaColeta> {
-    val lista = mutableListOf<RotaColeta>()
     try {
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            BufferedReader(InputStreamReader(inputStream, StandardCharsets.UTF_8)).use { reader ->
-                val cabecalho = reader.readLine() ?: return emptyList()
-                val separador = detectarSeparador(limparBomECaracteresInvalidos(cabecalho))
-                var linha = reader.readLine()
-                while (linha != null) {
-                    val linhaLimpa = limparBomECaracteresInvalidos(linha)
-                    if (linhaLimpa.isNotBlank()) {
-                        val colunas = parseLinhaCsvRfc4180(linhaLimpa, separador)
-                        if (colunas.size > maxOf(idxClone, idxParcela, idxPlanta)) {
-                            val clone = colunas[idxClone].trim()
-                            val parcela = colunas[idxParcela].trim()
-                            val planta = colunas[idxPlanta].trim().filter { it.isDigit() }.toIntOrNull() ?: 1
-                            if (clone.isNotBlank()) {
-                                lista.add(RotaColeta(clone = clone, parcela = parcela, planta = planta))
-                            }
-                        }
-                    }
-                    linha = reader.readLine()
-                }
-            }
-        }
+        val linhas = lerLinhasPlanilha(context, uri)
+        return parseLinhasCSVComIndices(linhas, idxClone, idxParcela, idxPlanta)
     } catch (e: Exception) {
-        Log.e("FileUtils", "Erro ao processar CSV: ${e.message}")
+        Log.e("FileUtils", "Erro ao processar planilha: ${e.message}")
     }
-    return lista
+    return emptyList()
 }
 
 /**
- * Exporta os [registros] como planilha CSV compatível com Excel pt-BR (delimitador ';' e UTF-8 + BOM).
- * Suporta Android 10+ (via MediaStore Downloads) e versões anteriores (via getExternalFilesDir).
- * Executa em thread de I/O e oferece opção de compartilhamento direto.
+ * Função pura de parsing de planilha de rota (testável sem dependência de Context/Android).
+ * Preserva a ordem das linhas (ou ordena pela coluna `Ordem` quando presente) e extrai
+ * metadados e coletas prévias de planilhas CEPLAC / Field Book.
+ */
+fun parseLinhasCSVComIndices(
+    linhas: List<String>,
+    idxClone: Int,
+    idxParcela: Int,
+    idxPlanta: Int
+): List<RotaColeta> {
+    if (linhas.isEmpty()) return emptyList()
+    val cabecalhoBruto = limparBomECaracteresInvalidos(linhas.first())
+    if (cabecalhoBruto.isBlank()) return emptyList()
+
+    val separador = detectarSeparador(cabecalhoBruto)
+    val cabecalho = parseLinhaCsvRfc4180(cabecalhoBruto, separador).map { it.trim().lowercase() }
+
+    fun idxCol(vararg nomes: String): Int =
+        cabecalho.indexOfFirst { col -> nomes.any { n -> col == n || col.replace(" ", "") == n } }
+
+    val idxPlantId = idxCol("plant_id", "plantid", "id_planta", "id_gerado")
+    val idxEnsaio = idxCol("ensaio", "campanha", "experimento")
+    val idxBloco = idxCol("bloco", "block", "rep_bloco")
+    val idxOrdem = idxCol("ordem", "order", "sequencia", "seq")
+    val idxSit2023c = idxCol("sitpla2023c", "hist_c")
+    val idxSit2023L = idxCol("sitpla2023l", "hist_l")
+    val idxSitPla = idxCol("sitpla", "situacao", "sit_planta")
+    val idxNFPeq = idxCol("nfpequenos")
+    val idxNFMed = idxCol("nfmedios")
+    val idxNFAd = idxCol("nfadultos")
+    val idxNFMad = idxCol("nfmaduros")
+    val idxNFVas = idxCol("nfvassoura")
+    val idxNFPod = idxCol("nfpodridao")
+    val idxNFOut = idxCol("nfoutrasperdas")
+    val idxNVTot = idxCol("nvtotal")
+    val idxCor = idxCol("corfruto")
+    val idxVirus = idxCol("notavirus")
+
+    val lista = mutableListOf<RotaColeta>()
+    var sequencial = 1
+
+    for (i in 1 until linhas.size) {
+        val linhaLimpa = limparBomECaracteresInvalidos(linhas[i])
+        if (linhaLimpa.isBlank()) continue
+        val colunas = parseLinhaCsvRfc4180(linhaLimpa, separador)
+        if (colunas.size <= maxOf(idxClone, idxParcela, idxPlanta)) continue
+
+        fun col(idx: Int): String = if (idx in colunas.indices) colunas[idx].trim() else ""
+        fun colInt(idx: Int): Int = col(idx).takeIf { it.isNotBlank() && it != "." }?.toIntOrNull() ?: 0
+
+        val clone = col(idxClone)
+        if (clone.isBlank()) continue
+
+        val parcela = col(idxParcela).ifBlank { "1" }
+        val planta = col(idxPlanta).filter { it.isDigit() }.toIntOrNull() ?: 1
+        val plantIdOrig = col(idxPlantId)
+        val ensaio = col(idxEnsaio)
+        val bloco = col(idxBloco)
+        val ordem = col(idxOrdem).filter { it.isDigit() }.toIntOrNull() ?: sequencial
+        val sit2023c = col(idxSit2023c)
+        val sit2023L = col(idxSit2023L)
+
+        val sitPlaBruto = col(idxSitPla)
+        val nfPeq = colInt(idxNFPeq)
+        val nfMed = colInt(idxNFMed)
+        val nfAd = colInt(idxNFAd)
+        val nfMad = colInt(idxNFMad)
+        val nfVas = colInt(idxNFVas)
+        val nfPod = colInt(idxNFPod)
+        val nfOut = colInt(idxNFOut)
+        val nvTot = colInt(idxNVTot)
+        val corBruta = col(idxCor).takeIf { it != "." }.orEmpty()
+        val notaVirus = colInt(idxVirus)
+
+        val temDadosColeta = sitPlaBruto.isNotBlank() ||
+            col(idxNFPeq).isNotBlank() || col(idxNFMed).isNotBlank() ||
+            col(idxNFAd).isNotBlank() || col(idxNFMad).isNotBlank() ||
+            col(idxNVTot).isNotBlank() || corBruta.isNotBlank()
+
+        val inativa = SituacaoPlanta.ehInativa(sitPlaBruto)
+        val somaFrutos = nfPeq + nfMed + nfAd + nfMad
+
+        val ocorrenciasAuto = mutableListOf<String>()
+        if (nfVas > 0 || nvTot > 0) ocorrenciasAuto.add(OcorrenciaCampo.VASSOURA_BRUXA.rotulo)
+        if (nfPod > 0) ocorrenciasAuto.add(OcorrenciaCampo.PODRIDAO_PARDA.rotulo)
+
+        val sitPlaNormalizado = when {
+            sitPlaBruto.equals("cavalo", ignoreCase = true) -> SituacaoPlanta.CAVALO.rotulo
+            sitPlaBruto.equals("morta", ignoreCase = true) -> SituacaoPlanta.MORTA.rotulo
+            sitPlaBruto.equals("errada", ignoreCase = true) -> SituacaoPlanta.ERRADA.rotulo
+            sitPlaBruto.equals("normal", ignoreCase = true) -> SituacaoPlanta.NORMAL.rotulo
+            temDadosColeta -> SituacaoPlanta.NORMAL.rotulo
+            else -> ""
+        }
+
+        val qtdFrutosStr = when {
+            inativa -> sitPlaNormalizado
+            temDadosColeta -> somaFrutos.toString()
+            else -> "0"
+        }
+
+        lista.add(
+            RotaColeta(
+                clone = clone,
+                parcela = parcela,
+                planta = planta,
+                coletado = temDadosColeta,
+                qtdFrutos = qtdFrutosStr,
+                observacao = ocorrenciasAuto.comoObservacao(),
+                plantIdOriginal = plantIdOrig,
+                ensaio = ensaio,
+                bloco = bloco,
+                ordem = ordem,
+                sitPla2023c = sit2023c,
+                sitPla2023L = sit2023L,
+                sitPla = sitPlaNormalizado,
+                nfPequenos = nfPeq,
+                nfMedios = nfMed,
+                nfAdultos = nfAd,
+                nfMaduros = nfMad,
+                nfVassoura = nfVas,
+                nfPodridao = nfPod,
+                nfOutrasPerdas = nfOut,
+                nvTotal = nvTot,
+                corFruto = corBruta,
+                notaVirus = notaVirus
+            )
+        )
+        sequencial++
+    }
+
+    // Se a planilha possui coluna explícita de Ordem, garante ordenação crescente fiel ao caminhamento
+    return if (idxOrdem != -1 && lista.all { it.ordem > 0 }) {
+        lista.sortedBy { it.ordem }
+    } else {
+        lista
+    }
+}
+
+/**
+ * Exporta os [registros] como planilha CSV compatível com Excel pt-BR (delimitador ';' e UTF-8 + BOM)
+ * e com as colunas analíticas padrão da CEPLAC / Field Book.
  */
 suspend fun exportarPlanilhaCEPECAssync(
     context: Context,
@@ -114,29 +416,7 @@ suspend fun exportarPlanilhaCEPECAssync(
     val nomeFinal = "Coleta_${nomeEnsaio}_${dataHora}.csv"
     val separador = ";"
 
-    val cabecalho = listOf(
-        "Campanha",
-        "ID_Gerado",
-        labelColuna1.ifBlank { "Clone" },
-        labelColuna2.ifBlank { "Parcela" },
-        labelColuna3.ifBlank { "Planta" },
-        "Contagem_IA",
-        "Contagem_Final",
-        "Status",
-        "Data_Hora",
-        "Data_ISO",
-        "Lat",
-        "Lng",
-        "Precisao_GPS_m",
-        "Altitude_m",
-        "Modelo_IA",
-        "Threshold",
-        "Operador",
-        "Fazenda",
-        "Versao_App",
-        "Ocorrencias",
-        "Foto_URI"
-    ).joinToString(separador) { escaparECorrigirCsv(it, separador) }
+    val cabecalho = gerarCabecalhoCsvCepec(labelColuna1, labelColuna2, labelColuna3, separador)
 
     var arquivoCriadoUri: Uri? = null
     var sucesso = false
@@ -159,14 +439,12 @@ suspend fun exportarPlanilhaCEPECAssync(
                     sucesso = true
                     mensagemRetorno = "Planilha salva em Downloads/CEPEC: $nomeFinal"
                 } catch (e: Exception) {
-                    // Evita deixar um arquivo vazio/corrompido em Downloads
                     Log.w("FileUtils", "Falha no MediaStore, usando fallback: ${e.message}")
                     try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
                 }
             }
         }
 
-        // Fallback para Android 9 ou quando a inserção no MediaStore não for permitida
         if (!sucesso) {
             val diretorio = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
             val arquivoDestino = File(diretorio, nomeFinal)
@@ -201,24 +479,75 @@ fun exportarPlanilhaCEPEC(
     labelColuna2: String,
     labelColuna3: String
 ) {
-    kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
-        exportarPlanilhaCEPECAssync(context, registros, ensaio, labelColuna1, labelColuna2, labelColuna3) { sucesso, msg, uri ->
+    CoroutineScope(Dispatchers.Main).launch {
+        exportarPlanilhaCEPECAssync(context, registros, ensaio, labelColuna1, labelColuna2, labelColuna3) { _, msg, _ ->
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
         }
     }
 }
 
+fun gerarCabecalhoCsvCepec(
+    labelColuna1: String = "Clone",
+    labelColuna2: String = "Parcela",
+    labelColuna3: String = "Planta",
+    separador: String = ";"
+): String = listOf(
+    "plant_id",
+    "Ensaio",
+    "Dia",
+    "Mês",
+    "Ano",
+    "Bloco",
+    labelColuna2.ifBlank { "Parcela" },
+    labelColuna3.ifBlank { "Planta" },
+    labelColuna1.ifBlank { "Clone" },
+    "Ordem",
+    "SitPla2023c",
+    "SitPla2023L",
+    "SitPla",
+    "Contagem_IA",
+    "Contagem_Final",
+    "NFPequenos",
+    "NFMedios",
+    "NFAdultos",
+    "NFMaduros",
+    "NFVassoura",
+    "NFPodridao",
+    "NFOutrasPerdas",
+    "NVTotal",
+    "NotaVirus",
+    "CorFruto",
+    "Ocorrencias",
+    "Data_Hora",
+    "Data_ISO",
+    "Lat",
+    "Lng",
+    "Precisao_GPS_m",
+    "Altitude_m",
+    "Modelo_IA",
+    "Threshold",
+    "Operador",
+    "Fazenda",
+    "Versao_App",
+    "Foto_URI"
+).joinToString(separador) { escaparECorrigirCsv(it, separador) }
+
 /** Formata número com vírgula decimal (padrão pt-BR), coerente com o delimitador ';' e aceito pelo Excel brasileiro. */
 private fun numBr(valor: Double, casas: Int): String =
-    String.format(Locale("pt", "BR"), "%.${casas}f", valor)
+    String.format(Locale.forLanguageTag("pt-BR"), "%.${casas}f", valor)
 
 /**
- * Obtém o clone a partir do ID da planta. O ID é "{clone}_{rotulo2}{parcela}_{rotulo3}{planta}",
- * então removemos os dois últimos segmentos: clones que contêm '_' não são mais truncados.
+ * Obtém o clone a partir do ID da planta.
+ * Suporta tanto o formato CEPLAC ("SCP-16005_TC-1801_par1_pla1_c0226")
+ * quanto o formato gerado pelo app ("{clone}_{rotulo2}{parcela}_{rotulo3}{planta}").
  */
 fun cloneDoPlantId(plantId: String): String {
     val partes = plantId.split("_")
-    return if (partes.size >= 3) partes.dropLast(2).joinToString("_") else partes.firstOrNull().orEmpty()
+    return when {
+        partes.size >= 5 && partes.any { it.startsWith("par", ignoreCase = true) } -> partes.first()
+        partes.size >= 3 -> partes.dropLast(2).joinToString("_")
+        else -> partes.firstOrNull().orEmpty()
+    }
 }
 
 /**
@@ -238,29 +567,63 @@ private fun gravarCsvNoFluxo(
         writer.write(cabecalho)
         writer.newLine()
 
-        // Texto livre: protegido contra injeção de fórmulas. Numéricos: apenas escape RFC 4180
-        // (senão latitudes/longitudes negativas receberiam um apóstrofo e virariam texto).
         fun t(v: String) = escaparECorrigirCsv(v, separador)
         fun n(v: String) = escaparECorrigirCsv(v, separador, protegerFormula = false)
 
-        registros.forEach { reg ->
-            val temGps = !(reg.lat == 0.0 && reg.lng == 0.0)
-            val naoColetavel = reg.diagnostico.toIntOrNull() == null
-            val status = if (naoColetavel) reg.diagnostico.ifBlank { "Sem contagem" } else "OK"
-            val iso = if (reg.timestampMs > 0L) formatoIso.format(Date(reg.timestampMs)) else ""
+        val registrosOrdenados = if (registros.any { it.ordem > 0 }) {
+            registros.sortedWith(compareBy({ if (it.ordem > 0) it.ordem else Int.MAX_VALUE }, { it.timestampMs }))
+        } else {
+            registros
+        }
 
+        registrosOrdenados.forEach { reg ->
+            val temGps = !(reg.lat == 0.0 && reg.lng == 0.0)
+            val inativa = reg.isInativa
+            val sitPlaFinal = when {
+                reg.sitPla.isNotBlank() -> reg.sitPla
+                inativa -> reg.diagnostico
+                else -> "Normal"
+            }
+
+            val cal = Calendar.getInstance().apply {
+                timeInMillis = if (reg.timestampMs > 0L) reg.timestampMs else System.currentTimeMillis()
+            }
+            val dia = cal.get(Calendar.DAY_OF_MONTH).toString()
+            val mes = (cal.get(Calendar.MONTH) + 1).toString()
+            val ano = cal.get(Calendar.YEAR).toString()
+            val iso = if (reg.timestampMs > 0L) formatoIso.format(Date(reg.timestampMs)) else ""
+            val cloneFinal = reg.cloneExplicito.ifBlank { cloneDoPlantId(reg.plantId) }
+
+            // Padrão estatístico CEPLAC: quando a planta é Cavalo/Morta/Errada, exporta "." nos campos de frutos
             val linha = listOf(
-                t(reg.ensaioManual),
                 t(reg.plantId),
-                t(cloneDoPlantId(reg.plantId)),
+                t(reg.ensaioManual),
+                n(dia),
+                n(mes),
+                n(ano),
+                t(reg.bloco),
                 t(reg.parcelaManual),
                 n(reg.numPlanta.toString()),
-                n(if (naoColetavel) "" else reg.contagemIa.toString()),
-                n(if (naoColetavel) "" else reg.contagemFinal.toString()),
-                t(status),
+                t(cloneFinal),
+                n(if (reg.ordem > 0) reg.ordem.toString() else ""),
+                t(reg.sitPla2023c),
+                t(reg.sitPla2023L),
+                t(sitPlaFinal),
+                n(if (inativa) "." else reg.contagemIa.toString()),
+                n(if (inativa) "." else reg.contagemFinal.toString()),
+                n(if (inativa) "." else reg.nfPequenos.toString()),
+                n(if (inativa) "." else reg.nfMedios.toString()),
+                n(if (inativa) "." else reg.nfAdultos.toString()),
+                n(if (inativa) "." else reg.nfMaduros.toString()),
+                n(if (inativa) "." else reg.nfVassoura.toString()),
+                n(if (inativa) "." else reg.nfPodridao.toString()),
+                n(if (inativa) "." else reg.nfOutrasPerdas.toString()),
+                n(if (inativa) "." else reg.nvTotal.toString()),
+                n(if (inativa) "." else reg.notaVirus.toString()),
+                t(if (inativa) "." else reg.corFruto.ifBlank { "." }),
+                t(reg.observacao.split("|").filter { it.isNotBlank() }.joinToString(" / ")),
                 t(reg.data),
                 n(iso),
-                // Sem fix de GPS o app guarda 0,0 (oceano): exporta vazio em vez de coordenada falsa
                 n(if (temGps) numBr(reg.lat, 7) else ""),
                 n(if (temGps) numBr(reg.lng, 7) else ""),
                 n(if (temGps) numBr(reg.precisaoGpsM.toDouble(), 1) else ""),
@@ -270,7 +633,6 @@ private fun gravarCsvNoFluxo(
                 t(reg.operador),
                 t(reg.fazenda),
                 t(reg.versaoApp),
-                t(reg.observacao.split("|").filter { it.isNotBlank() }.joinToString(" / ")),
                 t(reg.uri.toString())
             ).joinToString(separador)
 
@@ -302,12 +664,6 @@ fun compartilharArquivo(context: Context, uri: Uri, nomeExibicao: String) {
 
 // ── Utilitários RFC 4180 e Proteção de Injeção CSV ────────────────────────────
 
-/**
- * Parser de linha CSV compatível com RFC 4180:
- * - Trata campos delimitados por aspas;
- * - Suporta aspas escapadas via dupla aspa ("");
- * - Suporta delimitadores dentro de campos entre aspas.
- */
 fun parseLinhaCsvRfc4180(linha: String, separador: Char = ';'): List<String> {
     val resultado = mutableListOf<String>()
     val sb = StringBuilder()
@@ -320,7 +676,6 @@ fun parseLinhaCsvRfc4180(linha: String, separador: Char = ';'): List<String> {
         when {
             c == '"' -> {
                 if (emAspas && i + 1 < tam && linha[i + 1] == '"') {
-                    // Aspa escapada ("") dentro de campo com aspas
                     sb.append('"')
                     i++
                 } else {
@@ -344,10 +699,6 @@ fun parseLinhaCsvRfc4180(linha: String, separador: Char = ';'): List<String> {
     return resultado
 }
 
-/**
- * Autodetecta o separador mais provável de uma linha de cabeçalho:
- * avalia contagem de ';', ',', '\t' fora de aspas.
- */
 fun detectarSeparador(cabecalho: String): Char {
     var contPontoEVirgula = 0
     var contVirgula = 0
@@ -370,19 +721,12 @@ fun detectarSeparador(cabecalho: String): Char {
         contPontoEVirgula >= contVirgula && contPontoEVirgula >= contTab && contPontoEVirgula > 0 -> ';'
         contVirgula > contPontoEVirgula && contVirgula >= contTab -> ','
         contTab > 0 -> '\t'
-        else -> ';' // Padrão Excel pt-BR
+        else -> ';'
     }
 }
 
-/**
- * Sanitiza e escapa valores para saída CSV:
- * 1. Proteção contra CSV Formula Injection (apenas quando [protegerFormula]): se iniciar com
- *    '=', '+', '-' ou '@', prefixa com '\''. Deve ser desligada para colunas numéricas.
- * 2. RFC 4180 Escaping: se contiver delimitador, aspas ou quebra de linha, envolve em aspas e duplica aspas internas.
- */
 fun escaparECorrigirCsv(valor: String, separador: String = ";", protegerFormula: Boolean = true): String {
     var v = valor.trim()
-    // Proteção contra injeção de fórmulas executáveis no Excel / LibreOffice
     if (protegerFormula && (v.startsWith("=") || v.startsWith("+") || v.startsWith("-") || v.startsWith("@"))) {
         v = "'$v"
     }
@@ -395,19 +739,11 @@ fun escaparECorrigirCsv(valor: String, separador: String = ";", protegerFormula:
     }
 }
 
-/**
- * Sanitiza texto livre (campanha, clone, parcela, fazenda, operador) para uso seguro
- * em nomes de arquivo, preservando letras latinas estendidas (\u00C0-\u024F).
- */
 fun limparSimbologiaPura(texto: String): String =
     texto.trim()
         .replace(Regex("[^a-zA-Z0-9_\\-\\u00C0-\\u024F]+"), "_")
         .trim('_')
 
-/**
- * Remove BOM UTF-8 e caracteres de controle indesejados, preservando
- * letras latinas acentuadas.
- */
 fun limparBomECaracteresInvalidos(texto: String): String {
     if (texto.isEmpty()) return ""
     return texto
@@ -418,7 +754,6 @@ fun limparBomECaracteresInvalidos(texto: String): String {
         .trim()
 }
 
-/** Resultado de uma importação de modelo bem-sucedida. */
 data class ModeloImportado(
     val uri: Uri,
     val nome: String,
@@ -427,15 +762,6 @@ data class ModeloImportado(
     val sha256Curto: String
 )
 
-/**
- * Importa um modelo .tflite escolhido pelo usuário de forma segura:
- * 1. copia para um arquivo temporário calculando o SHA-256 (sem carregar tudo na memória);
- * 2. valida a assinatura TFL3;
- * 3. carrega no TFLite, valida entrada/saída e roda uma inferência de teste;
- * 4. só então promove para um arquivo definitivo com nome único.
- * O modelo ativo anterior nunca é sobrescrito por um arquivo inválido, e o nome único garante
- * que o app recarregue o detector ao importar uma nova versão.
- */
 fun importarModeloExterno(context: Context, uri: Uri): Result<ModeloImportado> {
     val nome = nomeDoArquivo(context, uri) ?: "modelo_externo.tflite"
     val temporario = File(context.filesDir, "modelo_importando.tmp")
@@ -472,7 +798,6 @@ fun importarModeloExterno(context: Context, uri: Uri): Result<ModeloImportado> {
             temporario.delete()
         }
 
-        // Mantém só os 2 modelos importados mais recentes (o ativo + o anterior)
         context.filesDir.listFiles { f -> f.name.startsWith("modelo_") && f.name.endsWith(".tflite") }
             ?.sortedByDescending { it.lastModified() }
             ?.drop(2)
@@ -489,10 +814,6 @@ fun importarModeloExterno(context: Context, uri: Uri): Result<ModeloImportado> {
     }
 }
 
-/**
- * Carrega o modelo, valida shapes/tipos e executa uma inferência com entrada zerada para garantir
- * que ele realmente roda neste aparelho. Lança exceção com mensagem amigável se não for suportado.
- */
 private fun validarModeloTflite(arquivo: File): FormatoModelo {
     val interp = try {
         Interpreter(arquivo, Interpreter.Options().apply { setNumThreads(2) })

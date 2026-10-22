@@ -1,6 +1,8 @@
 package com.example.myapplication.userinterface
 
 import android.net.Uri
+import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,7 +13,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Label
@@ -22,33 +23,34 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.ModelEmbutido
-import com.example.myapplication.data.MODELOS_EMBUTIDOS
+import com.example.myapplication.userinterface.util.ObjectDetectorHelper
 import com.example.myapplication.userinterface.util.assetModeloExiste
 import com.example.myapplication.userinterface.util.importarModeloExterno
-import androidx.compose.ui.platform.LocalContext
-import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelaConfiguracaoModelo(
     configAtual: ModelConfig,
+    detectorHelper: ObjectDetectorHelper? = null,
     onSalvar: (ModelConfig) -> Unit,
     onVoltar: () -> Unit
 ) {
     BackHandler {
         onVoltar()
     }
+
+    var mostrarDialogDiagnostico by remember { mutableStateOf(false) }
 
     // --- estados locais para edição ---
     var modeloSelecionado by remember { mutableStateOf(configAtual.modeloSelecionado) }
@@ -110,6 +112,11 @@ fun TelaConfiguracaoModelo(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
                     }
                 },
+                actions = {
+                    IconButton(onClick = { mostrarDialogDiagnostico = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Diagnóstico do Hardware/IA", tint = Color.White)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = verde,
                     titleContentColor = Color.White,
@@ -132,7 +139,6 @@ fun TelaConfiguracaoModelo(
                 SectionHeader(icon = Icons.Default.Memory, title = "Modelos Embutidos no App")
             }
 
-            // Nenhum modelo embutido no build (o .tflite nao e versionado no Git)
             if (modelosDisponiveis.isEmpty()) {
                 item {
                     Card(
@@ -161,7 +167,6 @@ fun TelaConfiguracaoModelo(
                         modeloSelecionado = modelo
                         modeloExternoUri = null
                         modeloExternoNome = ""
-                        // Preenche os labels padrão do modelo
                         labelsTexto = modelo.labelsDefault.joinToString(", ")
                     }
                 )
@@ -240,7 +245,6 @@ fun TelaConfiguracaoModelo(
                             color = Color.Gray
                         )
 
-                        // Chips dos labels atuais
                         if (listaLabels.isNotEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 listaLabels.chunked(3).forEach { linha ->
@@ -261,7 +265,6 @@ fun TelaConfiguracaoModelo(
                             Text("Nenhum filtro — todos os objetos serão contados", color = Color.Gray, fontSize = 13.sp)
                         }
 
-                        // Campo para adicionar novo label
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -292,7 +295,6 @@ fun TelaConfiguracaoModelo(
                             }
                         }
 
-                        // Botão para limpar tudo
                         if (listaLabels.isNotEmpty()) {
                             TextButton(
                                 onClick = { labelsTexto = "" },
@@ -412,6 +414,35 @@ fun TelaConfiguracaoModelo(
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+
+    if (mostrarDialogDiagnostico) {
+        val latencia = detectorHelper?.ultimaLatenciaMs ?: 0L
+        AlertDialog(
+            onDismissRequest = { mostrarDialogDiagnostico = false },
+            title = { Text("Diagnóstico de IA e Hardware", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Modelo Ativo: ${configAtual.nomeExibicao}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Arquivo: ${configAtual.nomeArquivoModelo}", fontSize = 12.sp, color = Color.DarkGray)
+                    Text("Resolução de Entrada: ${detectorHelper?.inputSize ?: 300} px", fontSize = 12.sp, color = Color.DarkGray)
+                    Text("Âncoras / Classes: ${detectorHelper?.numAnchors ?: 0} / ${detectorHelper?.numClasses ?: 1}", fontSize = 12.sp, color = Color.DarkGray)
+                    Text("Latência IA: ${if (latencia > 0) "${latencia} ms" else "Aguardando câmera"}", fontSize = 12.sp, color = Color.DarkGray)
+                    HorizontalDivider()
+                    Text("Dispositivo: ${Build.MANUFACTURER.uppercase()} ${Build.MODEL}", fontSize = 12.sp, color = Color.DarkGray)
+                    Text("Android: API ${Build.VERSION.SDK_INT} (Android ${Build.VERSION.RELEASE})", fontSize = 12.sp, color = Color.DarkGray)
+                    Text("Operação: 100% Offline (Edge AI · CEPLAC/CEPEC)", fontSize = 12.sp, color = verde, fontWeight = FontWeight.Medium)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { mostrarDialogDiagnostico = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = verde)
+                ) {
+                    Text("Fechar")
+                }
+            }
+        )
     }
 }
 
