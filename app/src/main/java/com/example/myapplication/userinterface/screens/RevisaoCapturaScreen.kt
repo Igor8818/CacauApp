@@ -212,11 +212,12 @@ fun RevisaoCapturaScreen(
             }
 
             val caixasFoto = if (bitmap != null && detectorHelper != null) {
+                val limiarEfetivoFoto = minOf(modelConfig.threshold, 0.25f) - 0.03f
                 detectorHelper.detectarAltaPrecisao(bitmap)
                     .filter { det ->
                         val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
                         val score = det.categories.firstOrNull()?.score ?: 0f
-                        score >= (modelConfig.threshold - 0.03f) &&
+                        score >= limiarEfetivoFoto &&
                             (modelConfig.labelsFiltro.isEmpty() || detectorHelper.numClasses <= 1 || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
                     }
                     .map { det ->

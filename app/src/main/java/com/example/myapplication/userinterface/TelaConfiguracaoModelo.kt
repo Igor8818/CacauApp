@@ -324,15 +324,25 @@ fun TelaConfiguracaoModelo(
 
                         // Threshold
                         Column {
-                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 55
+                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 25
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                                 Text("Confiança mínima: $thresholdVal%", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                if (thresholdVal > 60) {
+                                if (thresholdVal > 50) {
                                     Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFECB3)) {
                                         Text(
-                                            "⚠ Muito alto",
+                                            "⚠ Muito alto para campo",
                                             fontSize = 11.sp,
                                             color = Color(0xFFE65100),
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                } else if (thresholdVal in 20..30) {
+                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFE8F5E9)) {
+                                        Text(
+                                            "✓ Ideal (20% a 30%)",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF2E7D32),
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
@@ -340,12 +350,12 @@ fun TelaConfiguracaoModelo(
                                 }
                             }
                             Text(
-                                if (thresholdVal > 60)
-                                    "Modelos em desenvolvimento costumam ter score entre 40–70%. Recomendamos 30–50%."
+                                if (thresholdVal > 50)
+                                    "Atenção: valores acima de 50% ignoram frutos reais em sombra ou folhagem. O recomendado é 20% a 30%."
                                 else
-                                    "Detecções abaixo deste valor serão ignoradas. Para modelos novos, use valores baixos (20–40%).",
+                                    "Detecções abaixo deste valor são ignoradas. Em campo, 20% a 30% garante a detecção de frutos em sombra.",
                                 fontSize = 12.sp,
-                                color = if (thresholdVal > 60) Color(0xFFE65100) else Color.Gray
+                                color = if (thresholdVal > 50) Color(0xFFE65100) else Color.Gray
                             )
                             Slider(
                                 value = thresholdVal.toFloat(),
