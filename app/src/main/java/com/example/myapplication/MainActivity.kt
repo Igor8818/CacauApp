@@ -5,14 +5,14 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeOut
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.myapplication.data.RegistroCacau
+import com.example.myapplication.data.SituacaoPlanta
 import com.example.myapplication.userinterface.TelaConfiguracaoModelo
 import com.example.myapplication.userinterface.components.SeletorDropdownSimples
 import com.example.myapplication.userinterface.screens.*
@@ -78,6 +79,8 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
     val rotaPreCarregada by viewModel.rota.collectAsStateWithLifecycle()
     val modelConfig by viewModel.modelConfig.collectAsStateWithLifecycle()
     val ensaioNome by viewModel.ensaioNome.collectAsStateWithLifecycle()
+    val operadorNome by viewModel.operador.collectAsStateWithLifecycle()
+    val fazendaNome by viewModel.fazenda.collectAsStateWithLifecycle()
     val configConcluida by viewModel.configConcluida.collectAsStateWithLifecycle()
     val historicoValores1 by viewModel.historicoClones.collectAsStateWithLifecycle()
 
@@ -100,15 +103,21 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
     val altitudeAtual by viewModel.altitude.collectAsStateWithLifecycle()
 
     var abaSelecionada by rememberSaveable { mutableIntStateOf(0) }
-    var mostrarTelaModelo by remember { mutableStateOf(false) }
-    var mostrarTelaDiagnostico by remember { mutableStateOf(false) }
+    var mostrarTelaModelo by rememberSaveable { mutableStateOf(false) }
     var mostrarDialogNovoEnsaio by remember { mutableStateOf(false) }
+    var emTelaCheiaCamera by rememberSaveable { mutableStateOf(false) }
 
     var mostrarDialogMapeamento by remember { mutableStateOf(false) }
     val colunasEncontradas = remember { mutableStateListOf<String>() }
     var uriArquivoPendente by remember { mutableStateOf<Uri?>(null) }
     var avisoModeloExibido by rememberSaveable { mutableStateOf(false) }
     var ultimoToqueVoltar by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(abaSelecionada) {
+        if (abaSelecionada == 2) {
+            emTelaCheiaCamera = false
+        }
+    }
 
     BackHandler(enabled = mostrarDialogNovoEnsaio) {
         mostrarDialogNovoEnsaio = false
@@ -142,27 +151,28 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
     LaunchedEffect(configConcluida) {
         if (configConcluida && !avisoModeloExibido && !modeloDisponivel(context, modelConfig)) {
             avisoModeloExibido = true
-            Toast.makeText(context, "Nenhum modelo de IA encontrado. Importe um arquivo .tflite.", Toast.LENGTH_LONG).show()
-            mostrarTelaModelo = true
+            Toast.makeText(context, "Nenhum modelo de IA encontrado. Importe um arquivo .tflite ou opere no modo manual.", Toast.LENGTH_LONG).show()
         }
     }
 
-    // Leitor de planilha CSV de rota
+    // Leitor de planilha CSV de rota (suporta formato CEPLAC / Field Book e planilhas personalizadas)
     val launcherArquivoCSV = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
             val cabecalho = lerApenasCabecalho(context, it)
             if (cabecalho.isNotEmpty()) {
-                var idxClone = cabecalho.indexOfFirst { c -> c.lowercase() == "clone" || c.lowercase() == "v_id" }
+                var idxClone = cabecalho.indexOfFirst { c -> c.trim().lowercase() == "clone" || c.trim().lowercase() == "v_id" }
                 if (idxClone == -1) idxClone = cabecalho.indexOfFirst { c -> c.lowercase().contains("clone") || c.lowercase().contains("variedade") }
-                var idxParcela = cabecalho.indexOfFirst { c -> c.lowercase() == "parcela" || c.lowercase() == "rep" }
-                if (idxParcela == -1) idxParcela = cabecalho.indexOfFirst { c -> c.lowercase() == "bloco" || c.lowercase().contains("parcela") || c.lowercase().contains("rep") }
-                var idxPlanta = cabecalho.indexOfFirst { c -> c.lowercase() == "planta" || c.lowercase() == "p_id" }
-                if (idxPlanta == -1) idxPlanta = cabecalho.indexOfFirst { c -> c.lowercase() == "id" || c.lowercase().contains("planta") }
+                var idxParcela = cabecalho.indexOfFirst { c -> c.trim().lowercase() == "parcela" || c.trim().lowercase() == "rep" }
+                if (idxParcela == -1) idxParcela = cabecalho.indexOfFirst { c -> c.trim().lowercase() == "bloco" || c.lowercase().contains("parcela") || c.lowercase().contains("rep") }
+                var idxPlanta = cabecalho.indexOfFirst { c -> c.trim().lowercase() == "planta" || c.trim().lowercase() == "p_id" }
+                if (idxPlanta == -1) idxPlanta = cabecalho.indexOfFirst { c -> c.trim().lowercase() == "id" || c.lowercase().contains("planta") }
 
                 if (idxClone != -1 && idxParcela != -1 && idxPlanta != -1) {
                     val lista = processarCSVComIndices(context, it, idxClone, idxParcela, idxPlanta)
                     viewModel.carregarRota(lista)
-                    Toast.makeText(context, "${lista.size} plantas carregadas na rota!", Toast.LENGTH_SHORT).show()
+                    val jaColetadas = lista.count { p -> p.coletado }
+                    val msgExtra = if (jaColetadas > 0) " ($jaColetadas já avaliadas)" else ""
+                    Toast.makeText(context, "${lista.size} plantas carregadas na rota!$msgExtra", Toast.LENGTH_SHORT).show()
                 } else {
                     colunasEncontradas.clear()
                     colunasEncontradas.addAll(cabecalho)
@@ -175,7 +185,7 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
         }
     }
 
-    // Detector helper compartilhado para diagnóstico
+    // Detector helper compartilhado para diagnóstico na tela do Modelo IA
     val detectorHelperGlobal = remember(modelConfig) {
         buildDetectorHelper(context, modelConfig) {}
     }
@@ -183,19 +193,12 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
         onDispose { detectorHelperGlobal?.fechar() }
     }
 
-    // Roteamento
+    // Roteamento Principal
     when {
-        mostrarTelaDiagnostico -> {
-            DiagnosticoScreen(
-                modelConfig = modelConfig,
-                detectorHelper = detectorHelperGlobal,
-                onVoltar = { mostrarTelaDiagnostico = false }
-            )
-        }
-
         mostrarTelaModelo -> {
             TelaConfiguracaoModelo(
                 configAtual = modelConfig,
+                detectorHelper = detectorHelperGlobal,
                 onSalvar = { novaConfig ->
                     viewModel.atualizarModelConfig(novaConfig)
                     mostrarTelaModelo = false
@@ -223,13 +226,17 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
             TelaCheckInSimples(
                 ensaio = ensaioNome,
                 onEnsaioChange = { viewModel.setEnsaioNome(it) },
-                exibirBotaoVoltar = listaRegistros.isNotEmpty() || rotaPreCarregada.isNotEmpty(),
+                operador = operadorNome,
+                onOperadorChange = { viewModel.setOperador(it) },
+                fazenda = fazendaNome,
+                onFazendaChange = { viewModel.setFazenda(it) },
+                exibirBotaoVoltar = podeVoltarParaSessao,
                 onVoltarClick = { viewModel.setConfigConcluida(true) },
                 onContinuar = {
                     if (listaRegistros.isNotEmpty()) {
                         mostrarDialogNovoEnsaio = true
                     } else {
-                        viewModel.iniciarNovoEnsaio(ensaioNome)
+                        viewModel.iniciarNovoEnsaio(ensaioNome, operadorNome, fazendaNome)
                     }
                 }
             )
@@ -237,15 +244,26 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
             if (mostrarDialogNovoEnsaio) {
                 AlertDialog(
                     onDismissRequest = { mostrarDialogNovoEnsaio = false },
-                    title = { Text("Iniciar Novo Ensaio?", fontWeight = FontWeight.Bold) },
+                    title = { Text("Atualizar ou Iniciar Novo Ensaio?", fontWeight = FontWeight.Bold) },
                     text = {
                         Text(
-                            "Você possui ${listaRegistros.size} registros salvos do ensaio anterior. Deseja exportar a planilha antes de iniciar a nova campanha?"
+                            "Você possui ${listaRegistros.size} registros salvos. Deseja manter os registros atuais apenas atualizando os dados da campanha, ou exportar/limpar para um novo ensaio?"
                         )
                     },
                     confirmButton = {
                         Button(
                             onClick = {
+                                viewModel.setConfigConcluida(true)
+                                mostrarDialogNovoEnsaio = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                        ) {
+                            Text("Manter Registros")
+                        }
+                    },
+                    dismissButton = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TextButton(onClick = {
                                 exportarPlanilhaCEPEC(
                                     context,
                                     listaRegistros,
@@ -255,25 +273,17 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                                     labelVariavel3
                                 )
                                 viewModel.limparRegistrosCampanha()
-                                viewModel.iniciarNovoEnsaio(ensaioNome)
-                                mostrarDialogNovoEnsaio = false
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                        ) {
-                            Text("Exportar e Iniciar")
-                        }
-                    },
-                    dismissButton = {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = {
-                                viewModel.limparRegistrosCampanha()
-                                viewModel.iniciarNovoEnsaio(ensaioNome)
+                                viewModel.iniciarNovoEnsaio(ensaioNome, operadorNome, fazendaNome)
                                 mostrarDialogNovoEnsaio = false
                             }) {
-                                Text("Iniciar Direto", color = Color.Red)
+                                Text("Exportar e Limpar")
                             }
-                            TextButton(onClick = { mostrarDialogNovoEnsaio = false }) {
-                                Text("Cancelar")
+                            TextButton(onClick = {
+                                viewModel.limparRegistrosCampanha()
+                                viewModel.iniciarNovoEnsaio(ensaioNome, operadorNome, fazendaNome)
+                                mostrarDialogNovoEnsaio = false
+                            }) {
+                                Text("Limpar Direto", color = Color.Red)
                             }
                         }
                     }
@@ -282,11 +292,11 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
         }
 
         else -> {
-            BackHandler(enabled = abaSelecionada != 0) {
+            BackHandler(enabled = !emTelaCheiaCamera && abaSelecionada != 0) {
                 abaSelecionada = 0
             }
 
-            BackHandler(enabled = abaSelecionada == 0) {
+            BackHandler(enabled = !emTelaCheiaCamera && abaSelecionada == 0) {
                 val agora = System.currentTimeMillis()
                 if (agora - ultimoToqueVoltar < 2000L) {
                     (context as? ComponentActivity)?.finish()
@@ -299,64 +309,61 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
-                    val navItemColors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color(0xFF1B5E20),
-                        selectedTextColor = Color(0xFF1B5E20),
-                        indicatorColor = Color(0xFFE8F5E9),
-                        unselectedIconColor = Color(0xFF6D4C41),
-                        unselectedTextColor = Color(0xFF6D4C41)
-                    )
-                    NavigationBar(
-                        containerColor = Color(0xFFFAF7F2),
-                        tonalElevation = 8.dp
-                    ) {
-                        NavigationBarItem(
-                            selected = abaSelecionada == 0,
-                            onClick = { abaSelecionada = 0 },
-                            icon = { Icon(Icons.Default.PhotoCamera, null) },
-                            label = { Text("Coleta Livre", fontWeight = if (abaSelecionada == 0) FontWeight.Bold else FontWeight.Normal) },
-                            colors = navItemColors
+                    // Oculta completamente a barra inferior quando a câmera ou tela de revisão pós-foto está ativa
+                    if (!emTelaCheiaCamera) {
+                        val navItemColors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Color(0xFF1B5E20),
+                            selectedTextColor = Color(0xFF1B5E20),
+                            indicatorColor = Color(0xFFE8F5E9),
+                            unselectedIconColor = Color(0xFF6D4C41),
+                            unselectedTextColor = Color(0xFF6D4C41)
                         )
-                        NavigationBarItem(
-                            selected = abaSelecionada == 1,
-                            onClick = { abaSelecionada = 1 },
-                            icon = { Icon(Icons.Default.Route, null) },
-                            label = { Text("Modo Rota", fontWeight = if (abaSelecionada == 1) FontWeight.Bold else FontWeight.Normal) },
-                            colors = navItemColors
-                        )
-                        NavigationBarItem(
-                            selected = abaSelecionada == 2,
-                            onClick = { abaSelecionada = 2 },
-                            icon = {
-                                BadgedBox(badge = {
-                                    if (listaRegistros.isNotEmpty()) {
-                                        Badge(containerColor = Color(0xFF2E7D32)) { Text("${listaRegistros.size}") }
+                        NavigationBar(
+                            containerColor = Color(0xFFFAF7F2),
+                            tonalElevation = 8.dp
+                        ) {
+                            NavigationBarItem(
+                                selected = abaSelecionada == 0,
+                                onClick = { abaSelecionada = 0 },
+                                icon = { Icon(Icons.Default.PhotoCamera, null) },
+                                label = { Text("Coleta Livre", fontWeight = if (abaSelecionada == 0) FontWeight.Bold else FontWeight.Normal) },
+                                colors = navItemColors
+                            )
+                            NavigationBarItem(
+                                selected = abaSelecionada == 1,
+                                onClick = { abaSelecionada = 1 },
+                                icon = { Icon(Icons.Default.Route, null) },
+                                label = { Text("Modo Rota", fontWeight = if (abaSelecionada == 1) FontWeight.Bold else FontWeight.Normal) },
+                                colors = navItemColors
+                            )
+                            NavigationBarItem(
+                                selected = abaSelecionada == 2,
+                                onClick = { abaSelecionada = 2 },
+                                icon = {
+                                    BadgedBox(badge = {
+                                        if (listaRegistros.isNotEmpty()) {
+                                            Badge(containerColor = Color(0xFF2E7D32)) { Text("${listaRegistros.size}") }
+                                        }
+                                    }) {
+                                        Icon(Icons.Default.Collections, null)
                                     }
-                                }) {
-                                    Icon(Icons.Default.Collections, null)
-                                }
-                            },
-                            label = { Text("Galeria", fontWeight = if (abaSelecionada == 2) FontWeight.Bold else FontWeight.Normal) },
-                            colors = navItemColors
-                        )
-                        NavigationBarItem(
-                            selected = false,
-                            onClick = { mostrarTelaModelo = true },
-                            icon = { Icon(Icons.Default.SmartToy, null) },
-                            label = { Text("Modelo IA") },
-                            colors = navItemColors
-                        )
-                        NavigationBarItem(
-                            selected = false,
-                            onClick = { mostrarTelaDiagnostico = true },
-                            icon = { Icon(Icons.Default.Info, null) },
-                            label = { Text("Diagnóstico") },
-                            colors = navItemColors
-                        )
+                                },
+                                label = { Text("Galeria", fontWeight = if (abaSelecionada == 2) FontWeight.Bold else FontWeight.Normal) },
+                                colors = navItemColors
+                            )
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { mostrarTelaModelo = true },
+                                icon = { Icon(Icons.Default.SmartToy, null) },
+                                label = { Text("Modelo IA") },
+                                colors = navItemColors
+                            )
+                        }
                     }
                 }
             ) { padding ->
-                Box(Modifier.padding(padding)) {
+                val boxModifier = if (emTelaCheiaCamera) Modifier.fillMaxSize() else Modifier.padding(padding)
+                Box(boxModifier) {
                     val pExibicao = if (tipoNumVariavel2) valorNumVariavel2.toString() else valorTxtVariavel2
                     val plExibicao = if (tipoNumVariavel3) valorNumVariavel3.toString() else valorTxtVariavel3
 
@@ -386,18 +393,21 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             gpsPrecisao = gpsPrecisao,
                             temFixGps = temFixGps,
                             onAbrirModelo = { mostrarTelaModelo = true },
+                            onTrocarCampanha = { viewModel.setConfigConcluida(false) },
                             jaExistePlantId = { id -> viewModel.existePlantId(id) },
-                            onSave = { uri, _, contagemIa, contagemFinal ->
+                            onModoTelaCheiaChange = { emTelaCheiaCamera = it },
+                            onSave = { uri, idSalvo, diagTexto, contagemIa, contagemFinal, dadosAgro ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
-                                val idCompleto = "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}"
+                                val idCompleto = idSalvo.ifBlank { "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}" }
                                 val plantIntVal = if (tipoNumVariavel3) valorNumVariavel3 else 1
+                                val plSalvaLabel = plExibicao
 
                                 val reg = RegistroCacau(
                                     uri = uri,
                                     plantId = idCompleto,
                                     ensaioManual = ensaioNome,
                                     parcelaManual = pExibicao,
-                                    diagnostico = contagemFinal.toString(),
+                                    diagnostico = diagTexto,
                                     data = data,
                                     numPlanta = plantIntVal,
                                     lat = latAtual,
@@ -406,13 +416,39 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                                     contagemFinal = contagemFinal,
                                     modelo = modelConfig.nomeExibicao,
                                     threshold = modelConfig.threshold,
+                                    operador = operadorNome,
+                                    fazenda = fazendaNome,
                                     precisaoGpsM = gpsPrecisao,
                                     altitude = altitudeAtual,
-                                    timestampMs = System.currentTimeMillis()
+                                    observacao = dadosAgro.observacaoFormatada,
+                                    timestampMs = System.currentTimeMillis(),
+                                    cloneExplicito = valorVariavel1,
+                                    sitPla = dadosAgro.sitPla,
+                                    nfPequenos = dadosAgro.nfPequenos,
+                                    nfMedios = dadosAgro.nfMedios,
+                                    nfAdultos = dadosAgro.nfAdultos,
+                                    nfMaduros = dadosAgro.nfMaduros,
+                                    nfVassoura = dadosAgro.nfVassoura,
+                                    nfPodridao = dadosAgro.nfPodridao,
+                                    nfOutrasPerdas = dadosAgro.nfOutrasPerdas,
+                                    nvTotal = dadosAgro.nvTotal,
+                                    corFruto = dadosAgro.corFruto,
+                                    notaVirus = dadosAgro.notaVirus
                                 )
-                                viewModel.salvarRegistro(reg)
+                                // Garante que permanece na aba Coleta Livre (0) e persiste o registro imediatamente
+                                abaSelecionada = 0
+                                viewModel.salvarRegistro(reg, incrementarPlantaManual = true)
+
+                                val detalheMsg = if (SituacaoPlanta.ehInativa(diagTexto)) diagTexto else "$diagTexto frutos"
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Planta $idCompleto salva ($contagemFinal frutos)")
+                                    val res = snackbarHostState.showSnackbar(
+                                        message = "Planta $plSalvaLabel salva ($detalheMsg)",
+                                        actionLabel = "Desfazer",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                    if (res == SnackbarResult.ActionPerformed) {
+                                        viewModel.desfazerUltimoSalvoLivre()
+                                    }
                                 }
                             }
                         )
@@ -426,34 +462,77 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             onAbrirModelo = { mostrarTelaModelo = true },
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { viewModel.limparRota() },
-                            onSaveColetaRota = { uri, ponto, contagemFinal, observacao, contagemIaRevisada ->
+                            onModoTelaCheiaChange = { emTelaCheiaCamera = it },
+                            onSaveColetaRota = { uri, pontoAnterior, contagemFinal, dadosAgro, contagemIaRevisada ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
-                                val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
+                                val idCompleto = pontoAnterior.idEfetivo
                                 val contagemInt = contagemFinal.toIntOrNull() ?: 0
+                                val eraColetadoAntes = pontoAnterior.coletado
 
                                 val reg = RegistroCacau(
                                     uri = uri,
                                     plantId = idCompleto,
-                                    ensaioManual = ensaioNome,
-                                    parcelaManual = ponto.parcela,
+                                    ensaioManual = pontoAnterior.ensaio.ifBlank { ensaioNome },
+                                    parcelaManual = pontoAnterior.parcela,
                                     diagnostico = contagemFinal,
                                     data = data,
-                                    numPlanta = ponto.planta,
+                                    numPlanta = pontoAnterior.planta,
                                     lat = latAtual,
                                     lng = lngAtual,
                                     contagemIa = contagemIaRevisada,
                                     contagemFinal = contagemInt,
                                     modelo = modelConfig.nomeExibicao,
                                     threshold = modelConfig.threshold,
+                                    operador = operadorNome,
+                                    fazenda = fazendaNome,
                                     precisaoGpsM = gpsPrecisao,
                                     altitude = altitudeAtual,
-                                    observacao = observacao,
-                                    timestampMs = System.currentTimeMillis()
+                                    observacao = dadosAgro.observacaoFormatada,
+                                    timestampMs = System.currentTimeMillis(),
+                                    cloneExplicito = pontoAnterior.clone,
+                                    bloco = pontoAnterior.bloco,
+                                    ordem = pontoAnterior.ordem,
+                                    sitPla2023c = pontoAnterior.sitPla2023c,
+                                    sitPla2023L = pontoAnterior.sitPla2023L,
+                                    sitPla = dadosAgro.sitPla,
+                                    nfPequenos = dadosAgro.nfPequenos,
+                                    nfMedios = dadosAgro.nfMedios,
+                                    nfAdultos = dadosAgro.nfAdultos,
+                                    nfMaduros = dadosAgro.nfMaduros,
+                                    nfVassoura = dadosAgro.nfVassoura,
+                                    nfPodridao = dadosAgro.nfPodridao,
+                                    nfOutrasPerdas = dadosAgro.nfOutrasPerdas,
+                                    nvTotal = dadosAgro.nvTotal,
+                                    corFruto = dadosAgro.corFruto,
+                                    notaVirus = dadosAgro.notaVirus
                                 )
-                                viewModel.salvarRegistro(reg)
-                                viewModel.marcarPontoRota(ponto, coletado = true, qtdFrutos = contagemFinal, observacao = observacao)
+                                viewModel.salvarRegistro(reg, incrementarPlantaManual = false)
+                                viewModel.marcarPontoRota(
+                                    pontoOriginal = pontoAnterior,
+                                    coletado = true,
+                                    qtdFrutos = contagemFinal,
+                                    observacao = dadosAgro.observacaoFormatada,
+                                    sitPla = dadosAgro.sitPla,
+                                    nfPequenos = dadosAgro.nfPequenos,
+                                    nfMedios = dadosAgro.nfMedios,
+                                    nfAdultos = dadosAgro.nfAdultos,
+                                    nfMaduros = dadosAgro.nfMaduros,
+                                    nfVassoura = dadosAgro.nfVassoura,
+                                    nfPodridao = dadosAgro.nfPodridao,
+                                    nfOutrasPerdas = dadosAgro.nfOutrasPerdas,
+                                    nvTotal = dadosAgro.nvTotal,
+                                    corFruto = dadosAgro.corFruto,
+                                    notaVirus = dadosAgro.notaVirus
+                                )
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Ponto ${ponto.clone} P${ponto.parcela} salvo")
+                                    val res = snackbarHostState.showSnackbar(
+                                        message = "${pontoAnterior.clone} P${pontoAnterior.parcela}-Pl${pontoAnterior.planta} salvo ($contagemFinal)",
+                                        actionLabel = "Desfazer",
+                                        duration = SnackbarDuration.Short
+                                    )
+                                    if (res == SnackbarResult.ActionPerformed) {
+                                        viewModel.restaurarPontoRota(pontoAnterior, removerRegistroSeInedito = !eraColetadoAntes)
+                                    }
                                 }
                             }
                         )
@@ -479,6 +558,9 @@ fun AppCacauCEPEC(viewModel: AppViewModel = viewModel()) {
                             },
                             onEditarContagem = { plantId, novaContagem ->
                                 viewModel.editarContagemRegistro(plantId, novaContagem)
+                            },
+                            onAtualizarRegistroCompleto = { atualizado ->
+                                viewModel.atualizarRegistroCompleto(atualizado)
                             }
                         )
                     }

@@ -90,6 +90,22 @@ class AppRepository(private val context: Context) {
                 put("versaoApp", reg.versaoApp)
                 put("observacao", reg.observacao)
                 put("timestampMs", reg.timestampMs)
+                put("cloneExplicito", reg.cloneExplicito)
+                put("bloco", reg.bloco)
+                put("ordem", reg.ordem)
+                put("sitPla2023c", reg.sitPla2023c)
+                put("sitPla2023L", reg.sitPla2023L)
+                put("sitPla", reg.sitPla)
+                put("nfPequenos", reg.nfPequenos)
+                put("nfMedios", reg.nfMedios)
+                put("nfAdultos", reg.nfAdultos)
+                put("nfMaduros", reg.nfMaduros)
+                put("nfVassoura", reg.nfVassoura)
+                put("nfPodridao", reg.nfPodridao)
+                put("nfOutrasPerdas", reg.nfOutrasPerdas)
+                put("nvTotal", reg.nvTotal)
+                put("corFruto", reg.corFruto)
+                put("notaVirus", reg.notaVirus)
             }
             jsonArray.put(obj)
         }
@@ -106,6 +122,7 @@ class AppRepository(private val context: Context) {
                 val uriStr = obj.optString("uri", "")
                 val uri = if (uriStr.isNotBlank()) Uri.parse(uriStr) else Uri.EMPTY
                 val diagnostico = obj.optString("diagnostico", "0")
+                val sitPlaPadrao = if (SituacaoPlanta.ehInativa(diagnostico)) diagnostico else "Normal"
                 lista.add(
                     RegistroCacau(
                         uri = uri,
@@ -128,7 +145,23 @@ class AppRepository(private val context: Context) {
                         altitude = obj.optDouble("altitude", 0.0),
                         versaoApp = obj.optString("versaoApp", "1.0"),
                         observacao = obj.optString("observacao", ""),
-                        timestampMs = obj.optLong("timestampMs", 0L)
+                        timestampMs = obj.optLong("timestampMs", 0L),
+                        cloneExplicito = obj.optString("cloneExplicito", ""),
+                        bloco = obj.optString("bloco", ""),
+                        ordem = obj.optInt("ordem", 0),
+                        sitPla2023c = obj.optString("sitPla2023c", ""),
+                        sitPla2023L = obj.optString("sitPla2023L", ""),
+                        sitPla = obj.optString("sitPla", sitPlaPadrao).ifBlank { sitPlaPadrao },
+                        nfPequenos = obj.optInt("nfPequenos", 0),
+                        nfMedios = obj.optInt("nfMedios", 0),
+                        nfAdultos = obj.optInt("nfAdultos", 0),
+                        nfMaduros = obj.optInt("nfMaduros", 0),
+                        nfVassoura = obj.optInt("nfVassoura", 0),
+                        nfPodridao = obj.optInt("nfPodridao", 0),
+                        nfOutrasPerdas = obj.optInt("nfOutrasPerdas", 0),
+                        nvTotal = obj.optInt("nvTotal", 0),
+                        corFruto = obj.optString("corFruto", ""),
+                        notaVirus = obj.optInt("notaVirus", 0)
                     )
                 )
             }
@@ -154,6 +187,23 @@ class AppRepository(private val context: Context) {
                 put("coletado", r.coletado)
                 put("qtdFrutos", r.qtdFrutos)
                 put("observacao", r.observacao)
+                put("plantIdOriginal", r.plantIdOriginal)
+                put("ensaio", r.ensaio)
+                put("bloco", r.bloco)
+                put("ordem", r.ordem)
+                put("sitPla2023c", r.sitPla2023c)
+                put("sitPla2023L", r.sitPla2023L)
+                put("sitPla", r.sitPla)
+                put("nfPequenos", r.nfPequenos)
+                put("nfMedios", r.nfMedios)
+                put("nfAdultos", r.nfAdultos)
+                put("nfMaduros", r.nfMaduros)
+                put("nfVassoura", r.nfVassoura)
+                put("nfPodridao", r.nfPodridao)
+                put("nfOutrasPerdas", r.nfOutrasPerdas)
+                put("nvTotal", r.nvTotal)
+                put("corFruto", r.corFruto)
+                put("notaVirus", r.notaVirus)
             }
             jsonArray.put(obj)
         }
@@ -174,7 +224,24 @@ class AppRepository(private val context: Context) {
                         planta = obj.optInt("planta", 1),
                         coletado = obj.optBoolean("coletado", false),
                         qtdFrutos = obj.optString("qtdFrutos", "0"),
-                        observacao = obj.optString("observacao", "")
+                        observacao = obj.optString("observacao", ""),
+                        plantIdOriginal = obj.optString("plantIdOriginal", ""),
+                        ensaio = obj.optString("ensaio", ""),
+                        bloco = obj.optString("bloco", ""),
+                        ordem = obj.optInt("ordem", 0),
+                        sitPla2023c = obj.optString("sitPla2023c", ""),
+                        sitPla2023L = obj.optString("sitPla2023L", ""),
+                        sitPla = obj.optString("sitPla", ""),
+                        nfPequenos = obj.optInt("nfPequenos", 0),
+                        nfMedios = obj.optInt("nfMedios", 0),
+                        nfAdultos = obj.optInt("nfAdultos", 0),
+                        nfMaduros = obj.optInt("nfMaduros", 0),
+                        nfVassoura = obj.optInt("nfVassoura", 0),
+                        nfPodridao = obj.optInt("nfPodridao", 0),
+                        nfOutrasPerdas = obj.optInt("nfOutrasPerdas", 0),
+                        nvTotal = obj.optInt("nvTotal", 0),
+                        corFruto = obj.optString("corFruto", ""),
+                        notaVirus = obj.optInt("notaVirus", 0)
                     )
                 )
             }
@@ -204,8 +271,18 @@ class AppRepository(private val context: Context) {
     }
 
     fun carregarModelConfig(): ModelConfig {
-        val threshold = prefs.getFloat("threshold", 0.30f)
-        val maxRes = prefs.getInt("max_resultados", 15)
+        val jaMigrouV2 = prefs.getBoolean("prefs_deteccao_v2", false)
+        var threshold = prefs.getFloat("threshold", 0.25f)
+        var maxRes = prefs.getInt("max_resultados", 50)
+        if (!jaMigrouV2) {
+            if (threshold >= 0.30f) threshold = 0.25f
+            if (maxRes <= 15) maxRes = 50
+            prefs.edit()
+                .putFloat("threshold", threshold)
+                .putInt("max_resultados", maxRes)
+                .putBoolean("prefs_deteccao_v2", true)
+                .apply()
+        }
         val labelsStr = prefs.getString("labels_filtro", "cacau,fruto") ?: "cacau,fruto"
         val labels = labelsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
@@ -215,7 +292,6 @@ class AppRepository(private val context: Context) {
 
         if (temExterno && externoUriStr.isNotBlank()) {
             val uri = Uri.parse(externoUriStr)
-            // Se o arquivo externo em filesDir existir ou for uma URI utilizavel
             return ModelConfig(
                 modeloSelecionado = null,
                 modeloExternoUri = uri,
