@@ -9,8 +9,12 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import android.view.ScaleGestureDetector
 import androidx.camera.core.*
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.fillMaxSize
@@ -82,19 +86,20 @@ fun CameraWithAI(
             providerFuture.addListener({
                 val provider = providerFuture.get()
                 val preview = Preview.Builder()
-                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .setResolutionSelector(seletorPreview4x3())
                     .build().also {
                         it.setSurfaceProvider(view.surfaceProvider)
                     }
 
                 val analyzer = ImageAnalysis.Builder()
-                    .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                    .setResolutionSelector(seletorAnalise4x3())
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build().also { analysis ->
                         analysis.setAnalyzer(inferenceExecutor) { proxy ->
                             val now = System.currentTimeMillis()
-                            if (inferenceRunning.get() || (now - lastInferenceMs.get()) < minIntervalMs) {
+                            val intervaloEfetivo = if (helper.ultimaPassadaMs > 1500L) 800L else 180L
+                            if (inferenceRunning.get() || (now - lastInferenceMs.get()) < intervaloEfetivo) {
                                 proxy.close()
                                 return@setAnalyzer
                             }
@@ -278,3 +283,24 @@ private fun lerRotacaoExif(context: Context, uri: Uri): Int = try {
         }
     } ?: 0
 } catch (_: Exception) { 0 }
+
+/** Preview 4:3 com a maior resolução suportada (comportamento idêntico em qualquer fabricante). */
+fun seletorPreview4x3(): ResolutionSelector = ResolutionSelector.Builder()
+    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+    .build()
+
+/**
+ * Quadros para a IA: 4:3 com ~1280x960 (mais nitidez que o padrão 640x480 sem pesar em aparelhos de entrada).
+ * Se o aparelho não oferecer esse tamanho, usa o mais próximo acima e depois abaixo.
+ */
+fun seletorAnalise4x3(): ResolutionSelector = ResolutionSelector.Builder()
+    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+    .setResolutionStrategy(
+        ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+    )
+    .build()
+
+/** Foto final 4:3 na maior resolução do sensor (a IA decodifica já reduzida, sem risco de memória). */
+fun seletorCaptura4x3(): ResolutionSelector = ResolutionSelector.Builder()
+    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+    .build()

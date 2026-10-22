@@ -271,17 +271,16 @@ class AppRepository(private val context: Context) {
     }
 
     fun carregarModelConfig(): ModelConfig {
-        val jaMigrouV2 = prefs.getBoolean("prefs_deteccao_v2", false)
         var threshold = prefs.getFloat("threshold", 0.25f)
         var maxRes = prefs.getInt("max_resultados", 50)
-        if (!jaMigrouV2) {
-            if (threshold >= 0.30f) threshold = 0.25f
-            if (maxRes <= 15) maxRes = 50
-            prefs.edit()
-                .putFloat("threshold", threshold)
-                .putInt("max_resultados", maxRes)
-                .putBoolean("prefs_deteccao_v2", true)
-                .apply()
+        // Se o aparelho tinha um limiar antigo muito alto (ex: 55% ou 65%), ajusta para 25% (ótimo para campo)
+        if (threshold > 0.35f) {
+            threshold = 0.25f
+            prefs.edit().putFloat("threshold", 0.25f).apply()
+        }
+        if (maxRes < 30) {
+            maxRes = 50
+            prefs.edit().putInt("max_resultados", 50).apply()
         }
         val labelsStr = prefs.getString("labels_filtro", "cacau,fruto") ?: "cacau,fruto"
         val labels = labelsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }

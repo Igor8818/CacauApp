@@ -35,7 +35,7 @@ class ObjectDetectorHelper(
     var scoreThreshold: Float = 0.25f,
     var maxResults: Int = 50,
     var labelsModelo: List<String> = listOf("cacau", "fruto"),
-    var numThreads: Int = 4,
+    var numThreads: Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 4),
     var tentarGpu: Boolean = false
 ) {
     sealed class ModelSource {
@@ -71,6 +71,12 @@ class ObjectDetectorHelper(
     @Volatile var lastBitmapWidth:  Float = 1f; private set
     @Volatile var lastBitmapHeight: Float = 1f; private set
     @Volatile var ultimaLatenciaMs: Long = 0; private set
+    /** Duração da última passada de inferência da rede (ms): indica a velocidade real do aparelho. */
+    @Volatile var ultimaPassadaMs: Long = 0; private set
+    /** Prazo (System.nanoTime) para iniciar novas passadas no modo alta precisão; evita travar em celulares lentos. */
+    @Volatile private var prazoNs: Long = Long.MAX_VALUE
+    private var contadorLogLatencia = 0
+    private var debugSalvo = false
 
     private var loadedPath: String? = null
 
@@ -96,7 +102,6 @@ class ObjectDetectorHelper(
     private val rastrosAtivos = mutableListOf<RastroTemporal>()
     private var ultimoFrameLargura = 0f
     private var ultimoFrameAltura = 0f
-
     init {
         setup()
     }
@@ -272,6 +277,7 @@ class ObjectDetectorHelper(
             }
 
             if (!usarMultiEscala) {
+                prazoNs = Long.MAX_VALUE
                 val candidatos = ArrayList<FloatArray>(64)
                 executarPassadaRecorte(
                     interp = interp,
@@ -292,6 +298,7 @@ class ObjectDetectorHelper(
             }
 
             // ── MODO ALTA PRECISÃO (MULTI-ESCALA + TILING SOBREPOSTO + REALCE DE SOMBRA) ──
+            prazoNs = System.nanoTime() + 9_000_000_000L
             val todosCandidatos = ArrayList<FloatArray>(160)
             val limiarConsenso = (scoreThreshold - 0.04f).coerceAtLeast(0.18f)
 
@@ -401,6 +408,10 @@ class ObjectDetectorHelper(
         val cropW = srcRect.width().toFloat()
         val cropH = srcRect.height().toFloat()
         if (cropW <= 1f || cropH <= 1f) return
+        if (passadaId > 0 && System.nanoTime() + ultimaPassadaMs * 1_000_000L > prazoNs) {
+            Log.d("Detector", "Passada $passadaId ignorada (aparelho lento: ${ultimaPassadaMs}ms/passada)")
+            return
+        }
 
         val scale = minOf(inputSize / cropW, inputSize / cropH)
         val scaledW = (cropW * scale).roundToInt()
@@ -424,7 +435,14 @@ class ObjectDetectorHelper(
         preencherEntrada(buf, pixels, if (usarLutSombra) lutSombra255 else lut255)
         buf.rewind()
 
+        val t0 = System.nanoTime()
         interp.run(buf, out)
+        ultimaPassadaMs = (System.nanoTime() - t0) / 1_000_000L
+        if (layout == LayoutSaida.TRANSPOSTO) {
+            var mx = 0f; var n20 = 0; var n10 = 0
+            for (i in 0 until numAnchors) { val s = out[0][4][i]; if (s > mx) mx = s; if (s >= 0.20f) n20++; if (s >= 0.10f) n10++ }
+            Log.d("Detector", "DIAG passada $passadaId: ${ultimaPassadaMs}ms maxScore=${"%.2f".format(mx)} ancoras>=0.20:$n20 >=0.10:$n10 img=${image.width}x${image.height} sombra=$usarLutSombra")
+        }
 
         val candidatosPassada = ArrayList<FloatArray>(48)
         decodificarRecorte(

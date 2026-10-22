@@ -5,7 +5,6 @@ import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraControl
 import androidx.camera.core.ImageCapture
 import androidx.compose.foundation.BorderStroke
@@ -97,7 +96,7 @@ fun TelaPrincipalCapturaOtimizada(
 
     val imageCapture = remember {
         ImageCapture.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setResolutionSelector(com.example.myapplication.userinterface.util.seletorCaptura4x3())
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
             .build()
     }
@@ -413,10 +412,11 @@ fun TelaPrincipalCapturaOtimizada(
                 }
 
                 val listaFiltrada = if (detectorHelper != null) {
+                    val limiarCamera = minOf(modelConfig.threshold, 0.25f) - 0.02f
                     deteccoesAtuais.filter { det ->
                         val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
                         val score = det.categories.firstOrNull()?.score ?: 0f
-                        score >= (modelConfig.threshold - 0.02f) &&
+                        score >= limiarCamera &&
                             (modelConfig.labelsFiltro.isEmpty() || detectorHelper.numClasses <= 1 || modelConfig.labelsFiltro.any { f -> label.contains(f.lowercase()) })
                     }
                 } else emptyList()

@@ -54,11 +54,11 @@ dependencies {
     // o manifest merger com AGP 9 / compileSdk 35. Os tipos Detection e Category
     // foram substituídos por data classes próprias em DetectionResult.kt.
     // Interpreter direto para inferência YOLO raw
-    implementation("org.tensorflow:tensorflow-lite:2.16.1") {
+    implementation("com.google.ai.edge.litert:litert:1.4.0") {
         exclude(group = "org.tensorflow", module = "tensorflow-lite-support-api")
     }
     // GPU delegate (opcional — melhora performance em dispositivos compatíveis)
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+    implementation("com.google.ai.edge.litert:litert-gpu:1.4.0")
 
     // ── Google Services ─────────────────────────────────────────────────────
     implementation("com.google.android.gms:play-services-location:21.3.0")

@@ -40,8 +40,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ModelConfig(
             modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull { assetModeloExiste(application, it.nomeArquivo) },
             labelsFiltro = listOf("cacau", "fruto"),
-            threshold = 0.55f,
-            maxResultados = 10
+            threshold = 0.25f,
+            maxResultados = 50
         )
     )
     val modelConfig: StateFlow<ModelConfig> = _modelConfig.asStateFlow()
