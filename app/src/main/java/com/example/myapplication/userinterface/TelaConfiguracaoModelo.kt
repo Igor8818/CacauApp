@@ -1,9 +1,6 @@
 package com.example.myapplication.userinterface
 
 import android.net.Uri
-import android.os.Build
-import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -13,9 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,82 +19,44 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.ModelEmbutido
-import com.example.myapplication.userinterface.util.ObjectDetectorHelper
-import com.example.myapplication.userinterface.util.assetModeloExiste
-import com.example.myapplication.userinterface.util.importarModeloExterno
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
+import com.example.myapplication.data.MODELOS_EMBUTIDOS
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelaConfiguracaoModelo(
     configAtual: ModelConfig,
-    detectorHelper: ObjectDetectorHelper? = null,
     onSalvar: (ModelConfig) -> Unit,
     onVoltar: () -> Unit
 ) {
-    BackHandler {
-        onVoltar()
-    }
-
-    var mostrarDialogDiagnostico by remember { mutableStateOf(false) }
-
     // --- estados locais para edição ---
     var modeloSelecionado by remember { mutableStateOf(configAtual.modeloSelecionado) }
     var modeloExternoUri by remember { mutableStateOf(configAtual.modeloExternoUri) }
     var modeloExternoNome by remember { mutableStateOf(configAtual.modeloExternoNome) }
-    var detalhesModeloExterno by remember { mutableStateOf("") }
 
     var labelsTexto by remember { mutableStateOf(configAtual.labelsFiltro.joinToString(", ")) }
-    var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).roundToInt().toString()) }
+    var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).toInt().toString()) }
     var maxResultados by remember { mutableStateOf(configAtual.maxResultados) }
 
     var novoLabel by remember { mutableStateOf("") }
 
     val verde = Color(0xFF2E7D32)
 
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    val modelosDisponiveis = remember { MODELOS_EMBUTIDOS.filter { assetModeloExiste(context, it.nomeArquivo) } }
-
     val launcherModelo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
-            scope.launch {
-                detalhesModeloExterno = "Validando modelo..."
-                val resultado = withContext(Dispatchers.IO) { importarModeloExterno(context, it) }
-                resultado.fold(
-                    onSuccess = { importado ->
-                        modeloExternoUri = importado.uri
-                        modeloExternoNome = importado.nome
-                        modeloSelecionado = null
-                        detalhesModeloExterno = "%.2f MB | SHA-256: %s... | %s".format(
-                            importado.tamanhoMb, importado.sha256Curto, importado.formato.descricao()
-                        )
-                        Toast.makeText(context, "Modelo validado e importado!", Toast.LENGTH_SHORT).show()
-                    },
-                    onFailure = { erro ->
-                        detalhesModeloExterno = ""
-                        Toast.makeText(
-                            context,
-                            "Modelo recusado: ${erro.message ?: "formato inválido"}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                )
-            }
+            modeloExternoUri = it
+            modeloSelecionado = null // desseleciona embutido
+            // Tenta pegar o nome do arquivo
+            modeloExternoNome = it.lastPathSegment?.substringAfterLast("/") ?: "modelo_externo.tflite"
         }
     }
 
+    // Parse dos labels atuais como lista
     val listaLabels = remember(labelsTexto) {
         labelsTexto.split(",").map { it.trim() }.filter { it.isNotBlank() }
     }
@@ -109,12 +67,7 @@ fun TelaConfiguracaoModelo(
                 title = { Text("Configurar Modelo de IA", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onVoltar) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { mostrarDialogDiagnostico = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Diagnóstico do Hardware/IA", tint = Color.White)
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -139,26 +92,7 @@ fun TelaConfiguracaoModelo(
                 SectionHeader(icon = Icons.Default.Memory, title = "Modelos Embutidos no App")
             }
 
-            if (modelosDisponiveis.isEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0))
-                    ) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Nenhum modelo embutido neste build", fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
-                            Text(
-                                "O modelo do CEPEC é proprietário e não acompanha o repositório. " +
-                                    "Importe o arquivo .tflite na seção abaixo para ativar a detecção.",
-                                fontSize = 12.sp, color = Color.DarkGray
-                            )
-                        }
-                    }
-                }
-            }
-
-            items(modelosDisponiveis) { modelo ->
+            items(MODELOS_EMBUTIDOS) { modelo ->
                 CartaoModeloEmbutido(
                     modelo = modelo,
                     selecionado = modeloSelecionado?.nomeArquivo == modelo.nomeArquivo &&
@@ -167,6 +101,7 @@ fun TelaConfiguracaoModelo(
                         modeloSelecionado = modelo
                         modeloExternoUri = null
                         modeloExternoNome = ""
+                        // Preenche os labels padrão do modelo
                         labelsTexto = modelo.labelsDefault.joinToString(", ")
                     }
                 )
@@ -199,9 +134,6 @@ fun TelaConfiguracaoModelo(
                                 Text("Modelo carregado:", fontSize = 12.sp, color = Color.Gray)
                             }
                             Text(modeloExternoNome, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            if (detalhesModeloExterno.isNotBlank()) {
-                                Text(detalhesModeloExterno, fontSize = 11.sp, color = Color.Gray)
-                            }
                             Text(
                                 "⚠️ Após importar, configure os rótulos abaixo manualmente.",
                                 fontSize = 12.sp,
@@ -229,7 +161,7 @@ fun TelaConfiguracaoModelo(
 
             // ── SEÇÃO 3: RÓTULOS (LABELS) ──
             item {
-                SectionHeader(icon = Icons.AutoMirrored.Filled.Label, title = "Rótulos Detectados (Labels)")
+                SectionHeader(icon = Icons.Default.Label, title = "Rótulos Detectados (Labels)")
             }
 
             item {
@@ -245,6 +177,7 @@ fun TelaConfiguracaoModelo(
                             color = Color.Gray
                         )
 
+                        // Chips dos labels atuais
                         if (listaLabels.isNotEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 listaLabels.chunked(3).forEach { linha ->
@@ -265,6 +198,7 @@ fun TelaConfiguracaoModelo(
                             Text("Nenhum filtro — todos os objetos serão contados", color = Color.Gray, fontSize = 13.sp)
                         }
 
+                        // Campo para adicionar novo label
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -295,6 +229,7 @@ fun TelaConfiguracaoModelo(
                             }
                         }
 
+                        // Botão para limpar tudo
                         if (listaLabels.isNotEmpty()) {
                             TextButton(
                                 onClick = { labelsTexto = "" },
@@ -324,25 +259,15 @@ fun TelaConfiguracaoModelo(
 
                         // Threshold
                         Column {
-                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 25
+                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 55
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                                 Text("Confiança mínima: $thresholdVal%", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                if (thresholdVal > 50) {
+                                if (thresholdVal > 60) {
                                     Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFECB3)) {
                                         Text(
-                                            "⚠ Muito alto para campo",
+                                            "⚠ Muito alto",
                                             fontSize = 11.sp,
                                             color = Color(0xFFE65100),
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                } else if (thresholdVal in 20..30) {
-                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFE8F5E9)) {
-                                        Text(
-                                            "✓ Ideal (20% a 30%)",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF2E7D32),
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
@@ -350,12 +275,12 @@ fun TelaConfiguracaoModelo(
                                 }
                             }
                             Text(
-                                if (thresholdVal > 50)
-                                    "Atenção: valores acima de 50% ignoram frutos reais em sombra ou folhagem. O recomendado é 20% a 30%."
+                                if (thresholdVal > 60)
+                                    "Modelos em desenvolvimento costumam ter score entre 40–70%. Recomendamos 30–50%."
                                 else
-                                    "Detecções abaixo deste valor são ignoradas. Em campo, 20% a 30% garante a detecção de frutos em sombra.",
+                                    "Detecções abaixo deste valor serão ignoradas. Para modelos novos, use valores baixos (20–40%).",
                                 fontSize = 12.sp,
-                                color = if (thresholdVal > 50) Color(0xFFE65100) else Color.Gray
+                                color = if (thresholdVal > 60) Color(0xFFE65100) else Color.Gray
                             )
                             Slider(
                                 value = thresholdVal.toFloat(),
@@ -370,7 +295,7 @@ fun TelaConfiguracaoModelo(
                             }
                         }
 
-                        HorizontalDivider()
+                        Divider()
 
                         // Max resultados
                         Column {
@@ -381,12 +306,12 @@ fun TelaConfiguracaoModelo(
                                 horizontalArrangement = Arrangement.Center,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                IconButton(onClick = { if (maxResultados > 1) maxResultados-- }, modifier = Modifier.size(64.dp)) {
-                                    Icon(Icons.Default.RemoveCircle, "Diminuir", tint = Color.Red, modifier = Modifier.size(48.dp))
+                                IconButton(onClick = { if (maxResultados > 1) maxResultados-- }) {
+                                    Icon(Icons.Default.RemoveCircle, null, tint = Color.Red, modifier = Modifier.size(36.dp))
                                 }
                                 Text("$maxResultados", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 24.dp))
-                                IconButton(onClick = { if (maxResultados < 50) maxResultados++ }, modifier = Modifier.size(64.dp)) {
-                                    Icon(Icons.Default.AddCircle, "Aumentar", tint = verde, modifier = Modifier.size(48.dp))
+                                IconButton(onClick = { if (maxResultados < 50) maxResultados++ }) {
+                                    Icon(Icons.Default.AddCircle, null, tint = verde, modifier = Modifier.size(36.dp))
                                 }
                             }
                         }
@@ -400,7 +325,7 @@ fun TelaConfiguracaoModelo(
                 val podeSalvar = modeloSelecionado != null || modeloExternoUri != null
                 Button(
                     onClick = {
-                        val threshold = (thresholdTexto.toIntOrNull() ?: 30) / 100f
+                        val threshold = (thresholdTexto.toIntOrNull() ?: 50) / 100f
                         onSalvar(
                             ModelConfig(
                                 modeloSelecionado = modeloSelecionado,
@@ -424,35 +349,6 @@ fun TelaConfiguracaoModelo(
                 Spacer(Modifier.height(16.dp))
             }
         }
-    }
-
-    if (mostrarDialogDiagnostico) {
-        val latencia = detectorHelper?.ultimaLatenciaMs ?: 0L
-        AlertDialog(
-            onDismissRequest = { mostrarDialogDiagnostico = false },
-            title = { Text("Diagnóstico de IA e Hardware", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Modelo Ativo: ${configAtual.nomeExibicao}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Arquivo: ${configAtual.nomeArquivoModelo}", fontSize = 12.sp, color = Color.DarkGray)
-                    Text("Resolução de Entrada: ${detectorHelper?.inputSize ?: 300} px", fontSize = 12.sp, color = Color.DarkGray)
-                    Text("Âncoras / Classes: ${detectorHelper?.numAnchors ?: 0} / ${detectorHelper?.numClasses ?: 1}", fontSize = 12.sp, color = Color.DarkGray)
-                    Text("Latência IA: ${if (latencia > 0) "${latencia} ms" else "Aguardando câmera"}", fontSize = 12.sp, color = Color.DarkGray)
-                    HorizontalDivider()
-                    Text("Dispositivo: ${Build.MANUFACTURER.uppercase()} ${Build.MODEL}", fontSize = 12.sp, color = Color.DarkGray)
-                    Text("Android: API ${Build.VERSION.SDK_INT} (Android ${Build.VERSION.RELEASE})", fontSize = 12.sp, color = Color.DarkGray)
-                    Text("Operação: 100% Offline (Edge AI · CEPLAC/CEPEC)", fontSize = 12.sp, color = verde, fontWeight = FontWeight.Medium)
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { mostrarDialogDiagnostico = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = verde)
-                ) {
-                    Text("Fechar")
-                }
-            }
-        )
     }
 }
 

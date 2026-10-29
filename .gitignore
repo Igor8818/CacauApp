@@ -13,13 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
-
-# --- Modelos de IA (proprietarios CEPEC - NUNCA subir ao GitHub) ---
-*.tflite
-**/*.tflite
-modelopronto/
-/modelopronto/
-modeloia/
-/modeloia/
-app/src/main/assets/*.tflite
-/app/src/main/assets/*.tflite
+/CacauSync/
+/.m2/
