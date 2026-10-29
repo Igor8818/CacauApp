@@ -3,204 +3,183 @@ package com.example.myapplication.userinterface.util
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
-import android.view.ScaleGestureDetector
 import androidx.camera.core.*
-import androidx.camera.core.resolutionselector.AspectRatioStrategy
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.myapplication.data.DetectionResult
+import org.tensorflow.lite.task.vision.detector.Detection
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+// Executor dedicado — inferência nunca roda na main thread
 private val inferenceExecutor = Executors.newSingleThreadExecutor()
 
 /**
- * Visualizador de câmera com CameraX e inferência de IA desacoplada da UI:
- * - Aplica rotationDegrees aos frames antes da inferência para garantir caixas alinhadas;
- * - Foco e fotometria (AF/AE/AWB) automáticos priorizando o tronco no centro do quadro;
- * - Suporta toque para focar/expor e pinch-to-zoom nativo na tela do operador;
- * - Throttling adaptativo (~5.5 FPS) para alimentar o rastreamento temporal suave.
+ * Rotaciona o bitmap pelos graus indicados (normalmente vindos de
+ * imageInfo.rotationDegrees). Se degrees == 0, devolve o próprio bitmap
+ * sem custo extra.
  */
+private fun Bitmap.rotatedBy(degrees: Int): Bitmap {
+    if (degrees == 0) return this
+    val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+    return Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
+}
+
 @Composable
 fun CameraWithAI(
     helper: ObjectDetectorHelper,
     capture: ImageCapture,
-    onCameraControlPronto: ((CameraControl, CameraInfo) -> Unit)? = null,
-    onResultsUpdated: (List<DetectionResult>) -> Unit
+    onResultsUpdated: (List<Detection>) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
 
-    // Ao sair da tela de câmera (ex.: abrir a revisão da foto) é obrigatório desvincular o CameraX;
-    // caso contrário o analisador continua rodando em segundo plano e disputa o detector com a revisão.
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
-                if (providerFuture.isDone) providerFuture.get().unbindAll()
-            } catch (e: Exception) {
-                Log.w("CameraAI", "Falha ao desvincular camera: ${e.message}")
-            }
+    androidx.compose.ui.viewinterop.AndroidView(factory = { ctx ->
+        val view = PreviewView(ctx).apply {
+            // Garante que o preview use FILL_CENTER mantendo proporção da imagem
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
-    }
 
-    androidx.compose.ui.viewinterop.AndroidView(
-        factory = { ctx ->
-            val view = PreviewView(ctx).apply {
-                implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-            }
+        // Throttle para manter fluidez e resposta em tempo real
+        val inferenceRunning = AtomicBoolean(false)
+        val lastInferenceMs = AtomicLong(0L)
+        val minIntervalMs = 150L // Inferência rápida e fluida (~6 a 7 FPS)
 
-            val inferenceRunning = AtomicBoolean(false)
-            val lastInferenceMs = AtomicLong(0L)
-            val minIntervalMs = 180L // ~5.5 FPS: resposta rápida com rastreamento temporal suave
+        providerFuture.addListener({
+            val provider = providerFuture.get()
 
-            helper.setListener(object : ObjectDetectorHelper.DetectorListener {
-                override fun onResults(results: List<DetectionResult>) {
-                    onResultsUpdated(results)
-                }
-                override fun onError(mensagem: String) {
-                    Log.e("CameraAI", "Detector: $mensagem")
-                }
-            })
+            // Força Preview e Análise a usarem a mesma proporção 4:3 para evitar distorção ou FOV diferente
+            val preview = Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                .build()
+                .also { it.setSurfaceProvider(view.surfaceProvider) }
 
-            providerFuture.addListener({
-                val provider = providerFuture.get()
-                val preview = Preview.Builder()
-                    .setResolutionSelector(seletorPreview4x3())
-                    .build().also {
-                        it.setSurfaceProvider(view.surfaceProvider)
-                    }
+            val analyzer = ImageAnalysis.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build().also { analysis ->
+                    analysis.setAnalyzer(inferenceExecutor) { proxy ->
+                        val now = System.currentTimeMillis()
 
-                val analyzer = ImageAnalysis.Builder()
-                    .setResolutionSelector(seletorAnalise4x3())
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .build().also { analysis ->
-                        analysis.setAnalyzer(inferenceExecutor) { proxy ->
-                            val now = System.currentTimeMillis()
-                            val intervaloEfetivo = if (helper.ultimaPassadaMs > 1500L) 800L else 180L
-                            if (inferenceRunning.get() || (now - lastInferenceMs.get()) < intervaloEfetivo) {
-                                proxy.close()
-                                return@setAnalyzer
-                            }
-
-                            inferenceRunning.set(true)
-                            lastInferenceMs.set(now)
-
-                            try {
-                                val rotation = proxy.imageInfo.rotationDegrees
-                                val rawBitmap = proxy.toBitmap()
-                                proxy.close()
-
-                                // Rotaciona o bitmap conforme orientação física do sensor
-                                val bitmapProcessado = if (rotation != 0) {
-                                    val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-                                    Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-                                } else {
-                                    rawBitmap
-                                }
-
-                                helper.detect(bitmapProcessado)
-
-                            } catch (e: Exception) {
-                                Log.e("CameraAI", "Erro no processamento do frame: ${e.message}")
-                                try { proxy.close() } catch (_: Exception) {}
-                            } finally {
-                                inferenceRunning.set(false)
-                            }
+                        // Pula frame se inferência ainda está rodando ou se intervalo mínimo não passou
+                        if (inferenceRunning.get() || (now - lastInferenceMs.get()) < minIntervalMs) {
+                            proxy.close()
+                            return@setAnalyzer
                         }
-                    }
 
-                try {
-                    provider.unbindAll()
-                    val camera = provider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview, capture, analyzer
-                    )
+                        inferenceRunning.set(true)
+                        lastInferenceMs.set(now)
 
-                    // Configura zoom por pinça, fotometria automática no centro (tronco) e foco/exposição por toque
-                    val cameraControl = camera.cameraControl
-                    val cameraInfo = camera.cameraInfo
-                    onCameraControlPronto?.invoke(cameraControl, cameraInfo)
-
-                    view.post {
                         try {
-                            if (view.width > 0 && view.height > 0) {
-                                val centerPoint = view.meteringPointFactory.createPoint(view.width / 2f, view.height / 2f, 0.25f)
-                                val centerAction = FocusMeteringAction.Builder(
-                                    centerPoint,
-                                    FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
-                                ).setAutoCancelDuration(4, TimeUnit.SECONDS).build()
-                                cameraControl.startFocusAndMetering(centerAction)
-                            }
-                        } catch (_: Exception) {}
-                    }
+                            val rotation = proxy.imageInfo.rotationDegrees
+                            val bitmap = proxy.toBitmap().rotatedBy(rotation)
+                            proxy.close() // Libera buffer imediatamente
 
-                    val scaleGestureDetector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-                        override fun onScale(detector: ScaleGestureDetector): Boolean {
-                            val currentZoomRatio = cameraInfo.zoomState.value?.zoomRatio ?: 1f
-                            val delta = detector.scaleFactor
-                            cameraControl.setZoomRatio(currentZoomRatio * delta)
-                            return true
+                            helper.setListener(object : ObjectDetectorHelper.DetectorListener {
+                                override fun onResults(results: List<Detection>) {
+                                    onResultsUpdated(results)
+                                }
+                                override fun onError(mensagem: String) {
+                                    Log.e("CameraAI", "Detector: $mensagem")
+                                }
+                            })
+
+                            helper.detect(bitmap)
+
+                        } catch (e: Exception) {
+                            Log.e("CameraAI", "Erro no frame: ${e.message}")
+                            try { proxy.close() } catch (_: Exception) {}
+                        } finally {
+                            inferenceRunning.set(false)
                         }
-                    })
-
-                    view.setOnTouchListener { _, event ->
-                        scaleGestureDetector.onTouchEvent(event)
-                        if (event.action == android.view.MotionEvent.ACTION_UP && !scaleGestureDetector.isInProgress) {
-                            val factory = view.meteringPointFactory
-                            val point = factory.createPoint(event.x, event.y, 0.22f)
-                            val action = FocusMeteringAction.Builder(
-                                point,
-                                FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
-                            ).setAutoCancelDuration(5, TimeUnit.SECONDS).build()
-                            cameraControl.startFocusAndMetering(action)
-                        }
-                        true
                     }
-
-                } catch (e: Exception) {
-                    Log.e("CameraAI", "Falha ao vincular CameraX: ${e.message}")
                 }
-            }, ContextCompat.getMainExecutor(ctx))
-            view
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview, capture, analyzer
+            )
+        }, ContextCompat.getMainExecutor(ctx))
+        view
+    }, modifier = Modifier.fillMaxSize())
 }
 
 /**
- * Captura foto em resolução cheia com tratamento de falhas e notificação ao chamador.
+ * Renderiza os bounding boxes calculados pelo detector sobre a PreviewView
+ * respeitando com exatidão matemática a geometria de escala (FILL_CENTER) do CameraX.
+ * Isso garante que os boxes verdes fiquem exatamente alinhados sobre os frutos
+ * em qualquer celular (Samsung A50, Redmi Note 13, Xiaomi, Motorola, etc.).
  */
-fun tirarFoto(
-    context: Context,
-    capture: ImageCapture,
-    id: String,
-    onSucesso: (Uri) -> Unit,
-    onErro: (String) -> Unit = {}
+@Composable
+fun BoundingBoxOverlay(
+    detections: List<Detection>,
+    bitmapWidth: Float,
+    bitmapHeight: Float,
+    modifier: Modifier = Modifier
 ) {
-    val name = "${limparSimbologiaPura(id)}_${System.currentTimeMillis()}.jpg"
+    Canvas(modifier = modifier) {
+        if (bitmapWidth <= 0f || bitmapHeight <= 0f || size.width <= 0f || size.height <= 0f) return@Canvas
+
+        val viewWidth = size.width
+        val viewHeight = size.height
+        val viewAspect = viewWidth / viewHeight
+        val imageAspect = bitmapWidth / bitmapHeight
+
+        val scale: Float
+        val offsetX: Float
+        val offsetY: Float
+
+        if (viewAspect > imageAspect) {
+            // View é mais larga que o frame da câmera -> preenche largura e corta topo/baixo
+            scale = viewWidth / bitmapWidth
+            offsetX = 0f
+            offsetY = (viewHeight - bitmapHeight * scale) / 2f
+        } else {
+            // View é mais alta que o frame da câmera (padrão em smartphones modernos) -> preenche altura e corta laterais
+            scale = viewHeight / bitmapHeight
+            offsetX = (viewWidth - bitmapWidth * scale) / 2f
+            offsetY = 0f
+        }
+
+        detections.forEach { det ->
+            val rect = det.boundingBox
+            val screenLeft = rect.left * scale + offsetX
+            val screenTop = rect.top * scale + offsetY
+            val screenWidth = rect.width() * scale
+            val screenHeight = rect.height() * scale
+
+            // Desenha o retângulo verde vibrante
+            drawRect(
+                color = Color(0xFF00E676),
+                topLeft = androidx.compose.ui.geometry.Offset(screenLeft, screenTop),
+                size = androidx.compose.ui.geometry.Size(screenWidth, screenHeight),
+                style = Stroke(width = 3.dp.toPx())
+            )
+        }
+    }
+}
+
+fun tirarFoto(context: Context, capture: ImageCapture, id: String, onSucesso: (Uri) -> Unit) {
+    val name = "${id}_${System.currentTimeMillis()}.jpg"
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, name)
         put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -214,93 +193,14 @@ fun tirarFoto(
         values
     ).build()
 
-    capture.takePicture(
-        outputOptions,
-        ContextCompat.getMainExecutor(context),
+    capture.takePicture(outputOptions, ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                val uri = output.savedUri
-                if (uri != null) {
-                    onSucesso(uri)
-                } else {
-                    onErro("Foto salva, mas o identificador de arquivo não foi retornado.")
-                }
+                output.savedUri?.let { onSucesso(it) }
             }
-
             override fun onError(exc: ImageCaptureException) {
-                val erroMsg = "Erro na captura da foto: ${exc.message}"
-                Log.e("Camera", erroMsg)
-                onErro(erroMsg)
+                Log.e("Camera", "Erro ao capturar: ${exc.message}")
             }
         }
     )
 }
-
-/**
- * Decodifica um bitmap a partir de uma URI de imagem no dispositivo.
- */
-fun carregarBitmapDeUri(context: Context, uri: Uri, ladoMaximo: Int = 2400): Bitmap? {
-    return try {
-        // 1. Dimensões originais (sem alocar pixels) para calcular o downsample
-        val limites = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, limites) }
-        if (limites.outWidth <= 0 || limites.outHeight <= 0) return null
-
-        var amostra = 1
-        while (maxOf(limites.outWidth, limites.outHeight) / (amostra * 2) >= ladoMaximo) amostra *= 2
-
-        // 2. Decodifica já reduzido (evita OOM com fotos de 12-50 MP)
-        val bruto = context.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = amostra })
-        } ?: return null
-
-        // 3. Aplica a orientação EXIF: o Coil exibe a foto já girada, então a IA precisa
-        //    analisar exatamente a mesma orientação para que as caixas coincidam com a imagem.
-        val graus = lerRotacaoExif(context, uri)
-        if (graus == 0) bruto else {
-            val m = Matrix().apply { postRotate(graus.toFloat()) }
-            Bitmap.createBitmap(bruto, 0, 0, bruto.width, bruto.height, m, true).also {
-                if (it !== bruto) bruto.recycle()
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("CameraUtils", "Erro ao carregar bitmap da URI: ${e.message}")
-        null
-    }
-}
-
-/** Rotação (0/90/180/270) indicada pelo EXIF da foto, ou 0 se ausente/ilegível. */
-private fun lerRotacaoExif(context: Context, uri: Uri): Int = try {
-    context.contentResolver.openInputStream(uri)?.use { s ->
-        when (android.media.ExifInterface(s).getAttributeInt(
-            android.media.ExifInterface.TAG_ORIENTATION,
-            android.media.ExifInterface.ORIENTATION_NORMAL
-        )) {
-            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
-            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
-            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
-            else -> 0
-        }
-    } ?: 0
-} catch (_: Exception) { 0 }
-
-/** Preview 4:3 com a maior resolução suportada (comportamento idêntico em qualquer fabricante). */
-fun seletorPreview4x3(): ResolutionSelector = ResolutionSelector.Builder()
-    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
-    .build()
-
-/**
- * Quadros para a IA: 4:3 com ~1280x960 (mais nitidez que o padrão 640x480 sem pesar em aparelhos de entrada).
- * Se o aparelho não oferecer esse tamanho, usa o mais próximo acima e depois abaixo.
- */
-fun seletorAnalise4x3(): ResolutionSelector = ResolutionSelector.Builder()
-    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
-    .setResolutionStrategy(
-        ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
-    )
-    .build()
-
-/** Foto final 4:3 na maior resolução do sensor (a IA decodifica já reduzida, sem risco de memória). */
-fun seletorCaptura4x3(): ResolutionSelector = ResolutionSelector.Builder()
-    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
-    .build()

@@ -8,17 +8,14 @@ android {
         noCompress("tflite")
     }
     namespace = "com.example.myapplication"
-    // compileSdk 36 exigido pelas dependencias activity:1.12.3, core:1.17.0 e compose-bom 2025.05
-    // O problema anterior de manifest merger foi causado pelo task-vision (ja removido).
-    compileSdk = 36
+    compileSdk {
+        version = release(36)
+    }
 
     defaultConfig {
         applicationId = "com.example.myapplication"
         minSdk = 24
-        // targetSdk pode ser diferente do compileSdk:
-        // compileSdk=36 = podemos USAR simbolos da API 36
-        // targetSdk=35  = comportamento de runtime permanece no Android 15
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -40,34 +37,25 @@ android {
     }
     buildFeatures {
         compose = true
-    }
-    lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        mlModelBinding = true
     }
 }
 
 dependencies {
-    // ── TFLite ──────────────────────────────────────────────────────────────
-    // NOTA: tensorflow-lite-task-vision foi REMOVIDO intencionalmente.
-    // Essa lib de 2022 declara targetSdk<4 em seu AndroidManifest, o que quebra
-    // o manifest merger com AGP 9 / compileSdk 35. Os tipos Detection e Category
-    // foram substituídos por data classes próprias em DetectionResult.kt.
+    // Bibliotecas TFLite
+    // task-vision: mantido APENAS para o tipo Detection (não usamos ObjectDetector)
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
     // Interpreter direto para inferência YOLO raw
-    implementation("com.google.ai.edge.litert:litert:1.4.0") {
+    implementation("org.tensorflow:tensorflow-lite:2.16.1") {
         exclude(group = "org.tensorflow", module = "tensorflow-lite-support-api")
     }
-    // GPU delegate (opcional — melhora performance em dispositivos compatíveis)
-    implementation("com.google.ai.edge.litert:litert-gpu:1.4.0")
+    implementation("com.google.android.gms:play-services-location:21.2.0")
 
-    // ── Google Services ─────────────────────────────────────────────────────
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-
-    // ── AndroidX / Compose ──────────────────────────────────────────────────
+    // 2. CORREÇÃO: Usamos a versão 2.16.1 que resolve o conflito de namespace
+    // Ou adicionamos uma "exclusão" para evitar o erro que você recebeu
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -75,22 +63,26 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
 
-    // ── CameraX ─────────────────────────────────────────────────────────────
+    // Configuração do CameraX (Versão 1.5.3 sugerida pelo Android Studio)
     val cameraxVersion = "1.5.3"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // ── Imagens ─────────────────────────────────────────────────────────────
+    // Biblioteca Coil para visualizar as fotos
     implementation("io.coil-kt:coil-compose:2.6.0")
 
-    // ── Ícones Material estendidos ───────────────────────────────────────────
+    // Ícones estendidos (Resolve o erro do CameraAlt)
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
 
-    // ── Testes ──────────────────────────────────────────────────────────────
+    // Testes
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
+
+
+
+
 

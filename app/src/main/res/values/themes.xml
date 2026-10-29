@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Janela inicial marrom (mesma cor da splash do Compose) evita o "flash" branco ao abrir o app. -->
-    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FF2B1810</item>
-    </style>
+    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
