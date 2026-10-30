@@ -73,6 +73,9 @@ dependencies {
     // Biblioteca Coil para visualizar as fotos
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    // Cliente HTTP OkHttp para comunicação com CacauSync
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // Ícones estendidos (Resolve o erro do CameraAlt)
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
 
@@ -81,8 +84,3 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
-
-
-
-
-

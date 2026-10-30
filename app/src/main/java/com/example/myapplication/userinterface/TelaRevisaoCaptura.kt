@@ -56,7 +56,8 @@ data class CaixaAuditavel(
     val normRight: Float,
     val normBottom: Float,
     var estado: EstadoFruto = EstadoFruto.SADIO,
-    val manual: Boolean = false
+    val manual: Boolean = false,
+    val confianca: Float = 0.90f
 )
 
 /**
@@ -80,7 +81,8 @@ fun TelaRevisaoCaptura(
         sadios: Int,
         vassoura: Int,
         podridao: Int,
-        naoAvaliavel: Int
+        naoAvaliavel: Int,
+        caixas: List<CaixaAuditavel>
     ) -> Unit,
     onRefazer: () -> Unit
 ) {
@@ -93,6 +95,7 @@ fun TelaRevisaoCaptura(
             val hRef = bitmapHeightRef.coerceAtLeast(1f)
             deteccoesIniciais.forEach { det ->
                 val rect = det.boundingBox
+                val score = det.categories.firstOrNull()?.score ?: 0.85f
                 add(
                     CaixaAuditavel(
                         normLeft = (rect.left / wRef).coerceIn(0f, 1f),
@@ -100,7 +103,8 @@ fun TelaRevisaoCaptura(
                         normRight = (rect.right / wRef).coerceIn(0f, 1f),
                         normBottom = (rect.bottom / hRef).coerceIn(0f, 1f),
                         estado = EstadoFruto.SADIO,
-                        manual = false
+                        manual = false,
+                        confianca = score
                     )
                 )
             }
@@ -217,7 +221,8 @@ fun TelaRevisaoCaptura(
                                                 normRight = (normTapX + halfW).coerceIn(0f, 1f),
                                                 normBottom = (normTapY + halfH).coerceIn(0f, 1f),
                                                 estado = EstadoFruto.SADIO,
-                                                manual = true
+                                                manual = true,
+                                                confianca = 1.0f
                                             )
                                             caixas.add(nova)
                                             indiceSelecionado = caixas.lastIndex
@@ -497,7 +502,7 @@ fun TelaRevisaoCaptura(
                     Button(
                         onClick = {
                             if (plantaNaoColetavel) {
-                                onConfirmar("Não Coletável", 0, 0, 0, 0, 0)
+                                onConfirmar("Não Coletável", 0, 0, 0, 0, 0, emptyList())
                             } else {
                                 // "Resultado" fica SOMENTE numérico: o CacauSync extrai os dígitos desse campo.
                                 // O detalhamento por classe vai em colunas próprias no fim do CSV.
@@ -507,7 +512,8 @@ fun TelaRevisaoCaptura(
                                     qtdSadios,
                                     qtdVassoura,
                                     qtdPodridao,
-                                    qtdNaoAvaliavel
+                                    qtdNaoAvaliavel,
+                                    caixas.toList()
                                 )
                             }
                         },

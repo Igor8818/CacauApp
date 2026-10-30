@@ -1,6 +1,7 @@
 package com.example.myapplication.data
 
 import android.net.Uri
+import com.example.myapplication.userinterface.CaixaAuditavel
 
 data class RegistroCacau(
     val uri: Uri,
@@ -16,5 +17,7 @@ data class RegistroCacau(
     val sadios: Int = 0,
     val vassoura: Int = 0,
     val podridao: Int = 0,
-    val naoAvaliavel: Int = 0
+    val naoAvaliavel: Int = 0,
+    val caixas: List<CaixaAuditavel> = emptyList(),
+    var statusSync: String = "PENDENTE" // "PENDENTE", "SINCRONIZADO", "ERRO"
 )
