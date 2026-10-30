@@ -48,10 +48,16 @@ import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 
 import com.example.myapplication.data.ModelConfig
+import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.data.RotaColeta
 import com.example.myapplication.userinterface.TelaConfiguracaoModelo
+import com.example.myapplication.network.CacauSyncClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.example.myapplication.userinterface.TelaRevisaoCaptura
 import com.example.myapplication.userinterface.util.*
 import org.tensorflow.lite.task.vision.detector.Detection
@@ -230,7 +236,7 @@ fun AppCacauCEPEC() {
                             plantaNum = valorNumVariavel3, onPlantaNumChange = { valorNumVariavel3 = it },
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { valorTxtVariavel3 = it },
                             modelConfig = modelConfig,
-                            onSave = { uri, diagnostico, total, sadios, vassoura, podridao, naoAvail ->
+                            onSave = { uri, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
                                 val idCompleto = "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}"
                                 if (valorVariavel1.isNotBlank() && !historicoValores1.contains(valorVariavel1)) historicoValores1.add(valorVariavel1)
@@ -250,7 +256,8 @@ fun AppCacauCEPEC() {
                                         sadios = sadios,
                                         vassoura = vassoura,
                                         podridao = podridao,
-                                        naoAvaliavel = naoAvail
+                                        naoAvaliavel = naoAvail,
+                                        caixas = caixas
                                     )
                                 )
                                 if (tipoNumVariavel3) valorNumVariavel3++
@@ -262,7 +269,7 @@ fun AppCacauCEPEC() {
                             modelConfig = modelConfig,
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { rotaPreCarregada.clear() },
-                            onSaveColetaRota = { uri, ponto, diagnostico, total, sadios, vassoura, podridao, naoAvail ->
+                            onSaveColetaRota = { uri, ponto, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
                                 val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
                                 listaRegistros.removeAll { it.plantId == idCompleto }
@@ -281,7 +288,8 @@ fun AppCacauCEPEC() {
                                         sadios = sadios,
                                         vassoura = vassoura,
                                         podridao = podridao,
-                                        naoAvaliavel = naoAvail
+                                        naoAvaliavel = naoAvail,
+                                        caixas = caixas
                                     )
                                 )
                             }
@@ -352,7 +360,7 @@ fun TelaPrincipalCapturaOtimizada(
     plantaNum: Int, onPlantaNumChange: (Int) -> Unit,
     plantaTxt: String, onPlantaTxtChange: (String) -> Unit,
     modelConfig: ModelConfig,
-    onSave: (Uri, String, Int, Int, Int, Int, Int) -> Unit
+    onSave: (Uri, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
     var cameraAtiva by remember { mutableStateOf(false) }
@@ -399,8 +407,8 @@ fun TelaPrincipalCapturaOtimizada(
             deteccoesIniciais = caixasCapturadas,
             bitmapWidthRef = bitmapWidthCapturado,
             bitmapHeightRef = bitmapHeightCapturado,
-            onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail ->
-                onSave(fotoParaRevisao!!, diag, total, sadios, vassoura, podridao, naoAvail)
+            onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
+                onSave(fotoParaRevisao!!, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                 fotoParaRevisao = null
                 cameraAtiva = false
             },
@@ -481,7 +489,7 @@ fun TelaPrincipalCapturaOtimizada(
 
             Spacer(Modifier.weight(1f))
 
-            OutlinedButton(onClick = { onSave(Uri.EMPTY, "Não Coletável", 0, 0, 0, 0, 0) }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
+            OutlinedButton(onClick = { onSave(Uri.EMPTY, "Não Coletável", 0, 0, 0, 0, 0, emptyList()) }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                 Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA NÃO COLETÁVEL")
             }
             Button(onClick = { cameraAtiva = true }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(64.dp), shape = RoundedCornerShape(12.dp)) {
@@ -590,7 +598,7 @@ fun TelaModoFieldBook(
     modelConfig: ModelConfig,
     onCarregarPlanilhaClick: () -> Unit,
     onLimparRotaClick: () -> Unit,
-    onSaveColetaRota: (Uri, RotaColeta, String, Int, Int, Int, Int, Int) -> Unit
+    onSaveColetaRota: (Uri, RotaColeta, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
     var indiceAtual by rememberSaveable { mutableIntStateOf(0) }
@@ -644,8 +652,8 @@ fun TelaModoFieldBook(
                 deteccoesIniciais = caixasCapturadas,
                 bitmapWidthRef = bitmapWidthCapturado,
                 bitmapHeightRef = bitmapHeightCapturado,
-                onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail ->
-                    onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail)
+                onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
+                    onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                     pontoAtual.coletado = true
                     pontoAtual.qtdFrutos = diag
                     fotoParaRevisao = null
@@ -697,7 +705,7 @@ fun TelaModoFieldBook(
 
                 Spacer(Modifier.weight(1f))
 
-                OutlinedButton(onClick = { onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável", 0, 0, 0, 0, 0); pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
+                OutlinedButton(onClick = { onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável", 0, 0, 0, 0, 0, emptyList()); pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                     Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA MORTA / SECA / AUSENTE")
                 }
 
@@ -841,16 +849,250 @@ fun TelaCheckInSimples(ensaio: String, onEnsaioChange: (String) -> Unit, exibirB
 }
 
 @Composable
-fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: String, l3: String) {
+fun DialogConfiguracaoServidor(
+    onDismiss: () -> Unit,
+    onSalvar: (url: String, email: String, pass: String, ensaio: String) -> Unit
+) {
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Registros: $ensaio", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            IconButton(onClick = { exportarCSVCEPEC_Personalizado(context, registros, l1, l2, l3) }) {
-                Icon(Icons.Default.FileDownload, null, tint = Color(0xFF2E7D32))
+    val prefs = remember { context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE) }
+
+    var url by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
+    var email by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
+    var pass by remember { mutableStateOf(prefs.getString("user_pass", "") ?: "") }
+    var ensaio by remember { mutableStateOf(prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801") }
+    var testando by remember { mutableStateOf(false) }
+    var resultadoTeste by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Configurar CacauSync", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Insira o IP/URL do computador da CEPLAC onde o CacauSync está rodando (porta 8080):",
+                    fontSize = 12.sp,
+                    color = Color.DarkGray
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("URL do Servidor") },
+                    placeholder = { Text("http://192.168.1.50:8080") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("E-mail Institucional") },
+                    placeholder = { Text("pesquisador@cepec.gov.br") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = pass,
+                    onValueChange = { pass = it },
+                    label = { Text("Senha") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = ensaio,
+                    onValueChange = { ensaio = it },
+                    label = { Text("Código do Ensaio") },
+                    placeholder = { Text("TC-1801") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (resultadoTeste != null) {
+                    Text(
+                        resultadoTeste!!,
+                        fontSize = 12.sp,
+                        color = if (resultadoTeste!!.startsWith("Conectado")) Color(0xFF2E7D32) else Color.Red,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    prefs.edit()
+                        .putString("server_url", url.trim())
+                        .putString("user_email", email.trim())
+                        .putString("user_pass", pass)
+                        .putString("codigo_ensaio", ensaio.trim().uppercase())
+                        .apply()
+                    onSalvar(url.trim(), email.trim(), pass, ensaio.trim().uppercase())
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+            ) {
+                Text("SALVAR")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        coroutineScope.launch(Dispatchers.IO) {
+                            testando = true
+                            resultadoTeste = "Conectando..."
+                            val res = CacauSyncClient.login(url, email, pass)
+                            testando = false
+                            resultadoTeste = if (res.isSuccess) {
+                                "Conectado com sucesso!"
+                            } else {
+                                "Erro: ${res.exceptionOrNull()?.message}"
+                            }
+                        }
+                    },
+                    enabled = !testando
+                ) {
+                    Text(if (testando) "Testando..." else "TESTAR")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("CANCELAR")
+                }
             }
         }
-        Spacer(Modifier.height(16.dp))
+    )
+}
+
+@Composable
+fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: String, l3: String) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE) }
+
+    var mostrarConfigServidor by remember { mutableStateOf(false) }
+    var sincronizando by remember { mutableStateOf(false) }
+    var statusSyncMensagem by remember { mutableStateOf("") }
+    var resultadoSyncDialog by remember { mutableStateOf<String?>(null) }
+
+    if (mostrarConfigServidor) {
+        DialogConfiguracaoServidor(
+            onDismiss = { mostrarConfigServidor = false },
+            onSalvar = { _, _, _, _ ->
+                Toast.makeText(context, "Configurações salvas!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (resultadoSyncDialog != null) {
+        AlertDialog(
+            onDismissRequest = { resultadoSyncDialog = null },
+            title = { Text("Resultado da Sincronização", fontWeight = FontWeight.Bold) },
+            text = { Text(resultadoSyncDialog!!) },
+            confirmButton = {
+                Button(onClick = { resultadoSyncDialog = null }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("Registros: $ensaio", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("${registros.size} coletados", fontSize = 12.sp, color = Color.Gray)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { mostrarConfigServidor = true }) {
+                    Icon(Icons.Default.CloudSync, "Configurar CacauSync", tint = Color(0xFF1976D2))
+                }
+                IconButton(onClick = { exportarCSVCEPEC_Personalizado(context, registros, l1, l2, l3) }) {
+                    Icon(Icons.Default.FileDownload, "Exportar CSV", tint = Color(0xFF2E7D32))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Botão principal de sincronização
+        Button(
+            onClick = {
+                if (registros.isEmpty()) {
+                    Toast.makeText(context, "Nenhum registro para sincronizar.", Toast.LENGTH_SHORT).show()
+                    return@Button
+                }
+                val url = prefs.getString("server_url", "") ?: ""
+                val email = prefs.getString("user_email", "") ?: ""
+                val pass = prefs.getString("user_pass", "") ?: ""
+                val ensaioCod = prefs.getString("codigo_ensaio", ensaio.ifBlank { "TC-1801" }) ?: "TC-1801"
+
+                if (url.isBlank() || email.isBlank() || pass.isBlank()) {
+                    mostrarConfigServidor = true
+                    Toast.makeText(context, "Configure a URL do servidor, e-mail e senha antes de sincronizar.", Toast.LENGTH_LONG).show()
+                    return@Button
+                }
+
+                sincronizando = true
+                statusSyncMensagem = "Autenticando no CacauSync..."
+
+                coroutineScope.launch(Dispatchers.IO) {
+                    val loginRes = CacauSyncClient.login(url, email, pass)
+                    if (loginRes.isFailure) {
+                        sincronizando = false
+                        resultadoSyncDialog = "Falha no login com o servidor:\n${loginRes.exceptionOrNull()?.message}\n\nVerifique se o computador com CacauSync está ligado e se o IP está correto no botão de nuvem."
+                        return@launch
+                    }
+
+                    val token = loginRes.getOrThrow()
+                    val syncRes = CacauSyncClient.sincronizar(
+                        context = context,
+                        serverUrl = url,
+                        token = token,
+                        codigoEnsaio = ensaioCod,
+                        registros = registros,
+                        onProgresso = { statusSyncMensagem = it },
+                        onStatusRegistro = { pId, novoStatus ->
+                            val idx = registros.indexOfFirst { it.plantId == pId }
+                            if (idx != -1 && registros is SnapshotStateList) {
+                                (registros as SnapshotStateList)[idx] = registros[idx].copy(statusSync = novoStatus)
+                            }
+                        }
+                    )
+
+                    sincronizando = false
+                    if (syncRes.isSuccess) {
+                        val res = syncRes.getOrThrow()
+                        var resumo = "Sincronização concluída com sucesso!\n\n" +
+                                "• Total processadas: ${res.totalProcessadas}\n" +
+                                "• Leituras novas inseridas: ${res.novasInseridas}\n" +
+                                "• Leituras existentes: ${res.duplicadasIgnoradas}\n" +
+                                "• Fotos enviadas: ${res.fotosEnviadas}\n"
+                        if (res.mensagens.isNotEmpty()) {
+                            resumo += "\nAvisos do servidor:\n" + res.mensagens.take(3).joinToString("\n")
+                        }
+                        resultadoSyncDialog = resumo
+                    } else {
+                        resultadoSyncDialog = "Erro na sincronização:\n${syncRes.exceptionOrNull()?.message}"
+                    }
+                }
+            },
+            enabled = !sincronizando && registros.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            if (sincronizando) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(statusSyncMensagem, fontSize = 13.sp)
+            } else {
+                Icon(Icons.Default.CloudUpload, null)
+                Spacer(Modifier.width(8.dp))
+                Text("SINCRONIZAR COM CACAUSYNC (${registros.size})")
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
         if (registros.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhum item registrado.") }
         } else {
@@ -863,11 +1105,23 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                             } else {
                                 Icon(Icons.Default.ReportProblem, null, tint = Color.Red, modifier = Modifier.size(60.dp).padding(8.dp))
                             }
-                            Column(Modifier.padding(start = 12.dp)) {
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text(reg.plantId, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 Text("Resultado: ${reg.diagnostico} | $l2: ${reg.parcelaManual}", fontSize = 12.sp, color = Color.Gray)
                                 if (reg.totalFrutos > 0) {
                                     Text("Sadios: ${reg.sadios} • Vassoura: ${reg.vassoura} • Podridão: ${reg.podridao}", fontSize = 11.sp, color = Color(0xFF2E7D32))
+                                }
+                            }
+                            // Ícone de status de sincronização
+                            when (reg.statusSync) {
+                                "SINCRONIZADO" -> {
+                                    Icon(Icons.Default.CloudDone, "Sincronizado", tint = Color(0xFF2E7D32), modifier = Modifier.size(24.dp))
+                                }
+                                "ERRO" -> {
+                                    Icon(Icons.Default.CloudOff, "Erro", tint = Color.Red, modifier = Modifier.size(24.dp))
+                                }
+                                else -> {
+                                    Icon(Icons.Default.Schedule, "Pendente", tint = Color(0xFFFFA000), modifier = Modifier.size(20.dp))
                                 }
                             }
                         }
