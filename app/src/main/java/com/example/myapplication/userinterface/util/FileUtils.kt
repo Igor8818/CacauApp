@@ -44,10 +44,12 @@ fun exportarCSVFinal(context: Context, registros: List<RegistroCacau>, ensaio: S
         context.contentResolver.openOutputStream(it)?.use { out ->
             out.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
             val writer = out.bufferedWriter()
-            writer.write("Ensaio,Parcela,Plant_ID,Diagnostico,Data,Lat,Lng,Total_Frutos,Sadios,Vassoura,Podridao,Nao_Avaliavel")
+            writer.write("Ensaio,Parcela,Plant_ID,Diagnostico,Data,Lat,Lng,Total_Frutos,Sadios,Vassoura,Podridao,Nao_Avaliavel,Deteccoes_YOLO")
             writer.newLine()
             registros.forEach { reg ->
-                writer.write("${ensaio},${parcela},${reg.plantId},${reg.diagnostico},${reg.data},${reg.lat},${reg.lng},${reg.totalFrutos},${reg.sadios},${reg.vassoura},${reg.podridao},${reg.naoAvaliavel}")
+                val detJson = PersistenciaLocalRegistros.serializarCaixasParaCsv(reg.caixas).replace("\"", "\"\"")
+                val detCol = if (detJson.isNotEmpty()) "\"$detJson\"" else ""
+                writer.write("${ensaio},${parcela},${reg.plantId},${reg.diagnostico},${reg.data},${reg.lat},${reg.lng},${reg.totalFrutos},${reg.sadios},${reg.vassoura},${reg.podridao},${reg.naoAvaliavel},${detCol}")
                 writer.newLine()
             }
             writer.flush()

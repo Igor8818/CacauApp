@@ -166,6 +166,14 @@ fun AppCacauCEPEC() {
     }
 
     LaunchedEffect(Unit) {
+        val salvos = PersistenciaLocalRegistros.carregarRegistros(context)
+        if (salvos.isNotEmpty() && listaRegistros.isEmpty()) {
+            listaRegistros.addAll(salvos)
+            temDadosAnteriores = true
+            if (ensaioNome.isBlank()) {
+                ensaioNome = salvos.first().ensaioManual.ifBlank { "TC-1801" }
+            }
+        }
         launcherPermissoes.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
     }
 
@@ -260,6 +268,7 @@ fun AppCacauCEPEC() {
                                         caixas = caixas
                                     )
                                 )
+                                PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
                                 if (tipoNumVariavel3) valorNumVariavel3++
                             }
                         )
@@ -292,6 +301,7 @@ fun AppCacauCEPEC() {
                                         caixas = caixas
                                     )
                                 )
+                                PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
                             }
                         )
                         2 -> TelaGaleria(listaRegistros, ensaioNome, labelVariavel1, labelVariavel2, labelVariavel3)
@@ -1055,6 +1065,7 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                                 val idx = registros.indexOfFirst { it.plantId == pId }
                                 if (idx != -1 && registros is SnapshotStateList) {
                                     (registros as SnapshotStateList)[idx] = registros[idx].copy(statusSync = novoStatus)
+                                    PersistenciaLocalRegistros.salvarRegistros(context, registros)
                                 }
                             }
                         }
@@ -1165,15 +1176,16 @@ fun exportarCSVCEPEC_Personalizado(context: Context, registros: List<RegistroCac
             context.contentResolver.openOutputStream(targetUri)?.use { out ->
                 BufferedWriter(OutputStreamWriter(out, StandardCharsets.UTF_8)).use { writer ->
                     // Colunas 0..8 mantêm a ordem esperada pelo CacauSync; as novas ficam no FIM.
-                    val header = listOf("Campanha", "ID_Gerado", l1, l2, l3, "Resultado", "Data", "Lat", "Lng", "Total_Frutos", "Sadios", "Vassoura", "Podridao", "Nao_Avaliavel")
+                    val header = listOf("Campanha", "ID_Gerado", l1, l2, l3, "Resultado", "Data", "Lat", "Lng", "Total_Frutos", "Sadios", "Vassoura", "Podridao", "Nao_Avaliavel", "Deteccoes_YOLO")
                         .joinToString(",") { csvField(it) }
                     writer.write(header); writer.newLine()
                     registros.forEach { reg ->
                         val itemPrincipal = reg.plantId.split("_").firstOrNull() ?: ""
+                        val detJson = PersistenciaLocalRegistros.serializarCaixasParaCsv(reg.caixas)
                         val linha = listOf(
                             reg.ensaioManual, reg.plantId, itemPrincipal, reg.parcelaManual,
                             reg.numPlanta, reg.diagnostico, reg.data, reg.lat, reg.lng,
-                            reg.totalFrutos, reg.sadios, reg.vassoura, reg.podridao, reg.naoAvaliavel
+                            reg.totalFrutos, reg.sadios, reg.vassoura, reg.podridao, reg.naoAvaliavel, detJson
                         ).joinToString(",") { csvField(it) }
                         writer.write(linha); writer.newLine()
                     }

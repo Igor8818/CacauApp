@@ -115,6 +115,10 @@ object CacauSyncClient {
                 put("data", reg.data)
                 put("lat", reg.lat)
                 put("lng", reg.lng)
+                put("sadios", reg.sadios)
+                put("vassoura", reg.vassoura)
+                put("podridao", reg.podridao)
+                put("naoAvaliavel", reg.naoAvaliavel)
 
                 // Caixas auditadas do YOLO com confiança real
                 val deteccoesArray = JSONArray()
