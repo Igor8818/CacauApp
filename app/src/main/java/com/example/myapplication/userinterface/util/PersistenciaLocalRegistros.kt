@@ -2,17 +2,19 @@ package com.example.myapplication.userinterface.util
 
 import android.content.Context
 import android.net.Uri
+import android.util.AtomicFile
+import android.util.Log
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.userinterface.EstadoFruto
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 
 object PersistenciaLocalRegistros {
 
     private const val FILE_NAME = "registros_cacau_local.json"
-    private const val TEMP_FILE_NAME = "registros_cacau_local.tmp"
     private val fileLock = Any()
 
     fun salvarRegistros(context: Context, registros: List<RegistroCacau>) {
@@ -21,6 +23,9 @@ object PersistenciaLocalRegistros {
         val snapshot = registros.toList()
 
         synchronized(fileLock) {
+            val baseFile = File(context.filesDir, FILE_NAME)
+            val atomicFile = AtomicFile(baseFile)
+            var fos: FileOutputStream? = null
             try {
                 val root = JSONArray()
                 for (reg in snapshot) {
@@ -45,26 +50,29 @@ object PersistenciaLocalRegistros {
                     root.put(obj)
                 }
 
-                val targetFile = File(context.filesDir, FILE_NAME)
-                val tempFile = File(context.filesDir, TEMP_FILE_NAME)
-
-                // Escrita atômica: grava no arquivo temporário e renomeia
-                tempFile.writeText(root.toString(), Charsets.UTF_8)
-                if (!tempFile.renameTo(targetFile)) {
-                    // Fallback caso renameTo falhe em alguns sistemas de arquivos Android
-                    targetFile.writeText(root.toString(), Charsets.UTF_8)
-                    tempFile.delete()
+                // Escrita atômica suportada nativamente pelo SO Android (cria .bak automaticamente)
+                fos = atomicFile.startWrite()
+                fos.write(root.toString().toByteArray(Charsets.UTF_8))
+                atomicFile.finishWrite(fos)
+            } catch (e: Exception) {
+                Log.e("PersistenciaLocal", "Erro ao salvar registros com AtomicFile: ${e.message}", e)
+                if (fos != null) {
+                    atomicFile.failWrite(fos)
                 }
-            } catch (_: Exception) {}
+            }
         }
     }
 
     fun carregarRegistros(context: Context): List<RegistroCacau> {
         synchronized(fileLock) {
-            val file = File(context.filesDir, FILE_NAME)
-            if (!file.exists()) return emptyList()
+            val baseFile = File(context.filesDir, FILE_NAME)
+            val atomicFile = AtomicFile(baseFile)
+            if (!baseFile.exists()) return emptyList()
+
             return try {
-                val arr = JSONArray(file.readText(Charsets.UTF_8))
+                val bytes = atomicFile.readFully()
+                val jsonString = String(bytes, Charsets.UTF_8)
+                val arr = JSONArray(jsonString)
                 val lista = mutableListOf<RegistroCacau>()
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
@@ -115,7 +123,16 @@ object PersistenciaLocalRegistros {
                     )
                 }
                 lista
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e("PersistenciaLocal", "Erro ao carregar registros locais: ${e.message}", e)
+                // Se o arquivo existe e tem conteúdo, preserva fazendo backup de emergência em vez de sobrescrever dados
+                try {
+                    if (baseFile.length() > 0) {
+                        val backupFile = File(context.filesDir, "registros_backup_corrompido_${System.currentTimeMillis()}.json")
+                        baseFile.copyTo(backupFile, overwrite = true)
+                        Log.w("PersistenciaLocal", "Backup de emergência criado em: ${backupFile.name}")
+                    }
+                } catch (_: Exception) {}
                 emptyList()
             }
         }

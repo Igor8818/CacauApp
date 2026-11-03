@@ -266,9 +266,6 @@ class ObjectDetectorHelper(
             val finalDetections = mutableListOf<Detection>()
 
             try {
-                val imgW = image.width.toFloat()
-                val imgH = image.height.toFloat()
-
                 // 1. Prepara buffer de entrada via Letterbox Isomórfico (mantém proporção original do fruto sem achatamento)
                 val scale = min(inputWidth.toFloat() / imgW, inputHeight.toFloat() / imgH)
                 val newW = kotlin.math.round(imgW * scale).toInt().coerceAtLeast(1)
