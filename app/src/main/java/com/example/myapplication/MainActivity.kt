@@ -406,6 +406,14 @@ fun TelaPrincipalCapturaOtimizada(
         )
     }
 
+    DisposableEffect(detectorHelper) {
+        onDispose { detectorHelper.fechar() }
+    }
+
+    DisposableEffect(detectorHelper) {
+        onDispose { detectorHelper.fechar() }
+    }
+
     val isCloneValido = cloneVal.isNotBlank() &&
             (if (isNum2) true else parcelaTxt.isNotBlank()) &&
             (if (isNum3) true else plantaTxt.isNotBlank())
@@ -637,6 +645,10 @@ fun TelaModoFieldBook(
             scoreThreshold = modelConfig.threshold,
             maxResults = modelConfig.maxResultados
         )
+    }
+
+    DisposableEffect(detectorHelper) {
+        onDispose { detectorHelper.fechar() }
     }
 
     if (rotaCompleta.isEmpty()) {
@@ -948,15 +960,17 @@ fun DialogConfiguracaoServidor(
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(
                     onClick = {
+                        testando = true
+                        resultadoTeste = "Conectando..."
                         coroutineScope.launch(Dispatchers.IO) {
-                            testando = true
-                            resultadoTeste = "Conectando..."
                             val res = CacauSyncClient.login(url, email, pass)
-                            testando = false
-                            resultadoTeste = if (res.isSuccess) {
-                                "Conectado com sucesso!"
-                            } else {
-                                "Erro: ${res.exceptionOrNull()?.message}"
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                testando = false
+                                resultadoTeste = if (res.isSuccess) {
+                                    "Conectado com sucesso!"
+                                } else {
+                                    "Erro: ${res.exceptionOrNull()?.message}"
+                                }
                             }
                         }
                     },
@@ -1043,12 +1057,15 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
 
                 sincronizando = true
                 statusSyncMensagem = "Autenticando no CacauSync..."
+                val snapshotRegistros = registros.toList()
 
                 coroutineScope.launch(Dispatchers.IO) {
                     val loginRes = CacauSyncClient.login(url, email, pass)
                     if (loginRes.isFailure) {
-                        sincronizando = false
-                        resultadoSyncDialog = "Falha no login com o servidor:\n${loginRes.exceptionOrNull()?.message}\n\nVerifique se o computador com CacauSync está ligado e se o IP está correto no botão de nuvem."
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            sincronizando = false
+                            resultadoSyncDialog = "Falha no login com o servidor:\n${loginRes.exceptionOrNull()?.message}\n\nVerifique se o computador com CacauSync está ligado e se o IP está correto no botão de nuvem."
+                        }
                         return@launch
                     }
 
@@ -1058,33 +1075,41 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                         serverUrl = url,
                         token = token,
                         codigoEnsaio = ensaioCod,
-                        registros = registros,
-                        onProgresso = { statusSyncMensagem = it },
+                        registros = snapshotRegistros,
+                        onProgresso = { msg ->
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                statusSyncMensagem = msg
+                            }
+                        },
                         onStatusRegistro = { pId, novoStatus ->
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
                                 val idx = registros.indexOfFirst { it.plantId == pId }
                                 if (idx != -1 && registros is SnapshotStateList) {
                                     (registros as SnapshotStateList)[idx] = registros[idx].copy(statusSync = novoStatus)
-                                    PersistenciaLocalRegistros.salvarRegistros(context, registros)
                                 }
                             }
                         }
                     )
 
-                    sincronizando = false
-                    if (syncRes.isSuccess) {
-                        val res = syncRes.getOrThrow()
-                        var resumo = "Sincronização concluída com sucesso!\n\n" +
-                                "• Total processadas: ${res.totalProcessadas}\n" +
-                                "• Leituras novas inseridas: ${res.novasInseridas}\n" +
-                                "• Leituras existentes: ${res.duplicadasIgnoradas}\n" +
-                                "• Fotos enviadas: ${res.fotosEnviadas}\n"
-                        if (res.mensagens.isNotEmpty()) {
-                            resumo += "\nAvisos do servidor:\n" + res.mensagens.take(3).joinToString("\n")
+                    // I/O de disco rodando com segurança fora da thread de renderização da UI
+                    PersistenciaLocalRegistros.salvarRegistros(context, registros)
+
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        sincronizando = false
+                        if (syncRes.isSuccess) {
+                            val res = syncRes.getOrThrow()
+                            var resumo = "Sincronização concluída com sucesso!\n\n" +
+                                    "• Total processadas: ${res.totalProcessadas}\n" +
+                                    "• Leituras novas inseridas: ${res.novasInseridas}\n" +
+                                    "• Leituras existentes: ${res.duplicadasIgnoradas}\n" +
+                                    "• Fotos enviadas: ${res.fotosEnviadas}\n"
+                            if (res.mensagens.isNotEmpty()) {
+                                resumo += "\nAvisos do servidor:\n" + res.mensagens.take(3).joinToString("\n")
+                            }
+                            resultadoSyncDialog = resumo
+                        } else {
+                            resultadoSyncDialog = "Erro na sincronização:\n${syncRes.exceptionOrNull()?.message}"
                         }
-                        resultadoSyncDialog = resumo
-                    } else {
-                        resultadoSyncDialog = "Erro na sincronização:\n${syncRes.exceptionOrNull()?.message}"
                     }
                 }
             },

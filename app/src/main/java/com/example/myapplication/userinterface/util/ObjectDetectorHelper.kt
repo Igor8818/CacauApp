@@ -2,6 +2,9 @@ package com.example.myapplication.userinterface.util
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
 import android.util.Log
@@ -55,6 +58,12 @@ class ObjectDetectorHelper(
     private var inputWidth = 640
     private var inputHeight = 640
     private var isInputUint8 = false
+
+    // Buffers reutilizáveis para zerar GC churn por frame
+    private var letterboxBitmap: Bitmap? = null
+    private var letterboxPixels: IntArray? = null
+    private var inputByteBuffer: ByteBuffer? = null
+    private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     // Índices e dimensões para SSD (4 saídas)
     private var ssdNumDetections = 10
@@ -232,30 +241,55 @@ class ObjectDetectorHelper(
         lastBitmapHeight = image.height.toFloat()
         val interp = interpreter ?: run { setup(); interpreter ?: return }
 
-        var scaled: Bitmap? = null
         try {
             val imgW = image.width.toFloat()
             val imgH = image.height.toFloat()
 
-            // 1. Prepara buffer de entrada
-            scaled = Bitmap.createScaledBitmap(image, inputWidth, inputHeight, true)
-            val pixels = IntArray(inputWidth * inputHeight)
-            scaled.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
-            if (scaled != image && !scaled.isRecycled) {
-                scaled.recycle()
-                scaled = null
+            // 1. Prepara buffer de entrada via Letterbox Isomórfico (mantém proporção original do fruto sem achatamento)
+            val scale = min(inputWidth.toFloat() / imgW, inputHeight.toFloat() / imgH)
+            val newW = kotlin.math.round(imgW * scale).toInt().coerceAtLeast(1)
+            val newH = kotlin.math.round(imgH * scale).toInt().coerceAtLeast(1)
+            val padX = (inputWidth - newW) / 2f
+            val padY = (inputHeight - newH) / 2f
+
+            var lbBitmap = letterboxBitmap
+            if (lbBitmap == null || lbBitmap.width != inputWidth || lbBitmap.height != inputHeight) {
+                lbBitmap?.recycle()
+                lbBitmap = Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888)
+                letterboxBitmap = lbBitmap
             }
 
-            val buf: ByteBuffer
+            val canvas = Canvas(lbBitmap)
+            // Cor padrão cinza neutro do Ultralytics YOLO: RGB(114, 114, 114)
+            canvas.drawColor(Color.rgb(114, 114, 114))
+            val destRect = RectF(padX, padY, padX + newW, padY + newH)
+            canvas.drawBitmap(image, null, destRect, letterboxPaint)
+
+            var pixels = letterboxPixels
+            val totalPixels = inputWidth * inputHeight
+            if (pixels == null || pixels.size != totalPixels) {
+                pixels = IntArray(totalPixels)
+                letterboxPixels = pixels
+            }
+            lbBitmap.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
+
+            val bytesPerChannel = if (isInputUint8) 1 else 4
+            val bufferCapacity = totalPixels * 3 * bytesPerChannel
+            var buf = inputByteBuffer
+            if (buf == null || buf.capacity() != bufferCapacity) {
+                buf = ByteBuffer.allocateDirect(bufferCapacity).order(ByteOrder.nativeOrder())
+                inputByteBuffer = buf
+            } else {
+                buf.rewind()
+            }
+
             if (isInputUint8) {
-                buf = ByteBuffer.allocateDirect(inputWidth * inputHeight * 3).order(ByteOrder.nativeOrder())
                 for (px in pixels) {
                     buf.put(((px shr 16) and 0xFF).toByte())
                     buf.put(((px shr 8)  and 0xFF).toByte())
                     buf.put((px          and 0xFF).toByte())
                 }
             } else {
-                buf = ByteBuffer.allocateDirect(inputWidth * inputHeight * 3 * 4).order(ByteOrder.nativeOrder())
                 for (px in pixels) {
                     buf.putFloat(((px shr 16) and 0xFF) / 255f)
                     buf.putFloat(((px shr 8)  and 0xFF) / 255f)
@@ -293,10 +327,15 @@ class ObjectDetectorHelper(
                     val ymax = locations[0][i][2]
                     val xmax = locations[0][i][3]
 
-                    val left   = (xmin * imgW).coerceIn(0f, imgW)
-                    val top    = (ymin * imgH).coerceIn(0f, imgH)
-                    val right  = (xmax * imgW).coerceIn(0f, imgW)
-                    val bottom = (ymax * imgH).coerceIn(0f, imgH)
+                    val x1Tensor = xmin * inputWidth
+                    val y1Tensor = ymin * inputHeight
+                    val x2Tensor = xmax * inputWidth
+                    val y2Tensor = ymax * inputHeight
+
+                    val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
+                    val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
+                    val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
+                    val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
 
                     if (right <= left || bottom <= top) continue
 
@@ -389,10 +428,15 @@ class ObjectDetectorHelper(
                 val nmsResult = nms(candidates, iouThresh = 0.45f).take(maxResults)
 
                 for (box in nmsResult) {
-                    val left   = ((box[0] - box[2] / 2f) * imgW).coerceIn(0f, imgW)
-                    val top    = ((box[1] - box[3] / 2f) * imgH).coerceIn(0f, imgH)
-                    val right  = ((box[0] + box[2] / 2f) * imgW).coerceIn(0f, imgW)
-                    val bottom = ((box[1] + box[3] / 2f) * imgH).coerceIn(0f, imgH)
+                    val x1Tensor = (box[0] - box[2] / 2f) * inputWidth
+                    val y1Tensor = (box[1] - box[3] / 2f) * inputHeight
+                    val x2Tensor = (box[0] + box[2] / 2f) * inputWidth
+                    val y2Tensor = (box[1] + box[3] / 2f) * inputHeight
+
+                    val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
+                    val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
+                    val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
+                    val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
 
                     if (right <= left || bottom <= top) continue
 
@@ -418,10 +462,6 @@ class ObjectDetectorHelper(
         } catch (e: Exception) {
             Log.e("Detector", "Erro na detecção: ${e.message}", e)
             detectorListener?.onResults(emptyList())
-        } finally {
-            if (scaled != null && scaled != image && !scaled.isRecycled) {
-                scaled.recycle()
-            }
         }
     }
 
@@ -493,6 +533,10 @@ class ObjectDetectorHelper(
         interpreter?.close()
         interpreter = null
         loadedPath = null
+        letterboxBitmap?.recycle()
+        letterboxBitmap = null
+        letterboxPixels = null
+        inputByteBuffer = null
     }
 
     interface DetectorListener {

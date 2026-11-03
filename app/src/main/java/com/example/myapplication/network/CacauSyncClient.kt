@@ -120,16 +120,20 @@ object CacauSyncClient {
                 put("podridao", reg.podridao)
                 put("naoAvaliavel", reg.naoAvaliavel)
 
-                // Caixas auditadas do YOLO com confiança real
+                // Caixas auditadas do YOLO com confiança real e clamping [0.0, 1.0]
                 val deteccoesArray = JSONArray()
                 for (cx in reg.caixas) {
+                    val left = cx.normLeft.coerceIn(0f, 1f)
+                    val top = cx.normTop.coerceIn(0f, 1f)
+                    val right = cx.normRight.coerceIn(left, 1f)
+                    val bottom = cx.normBottom.coerceIn(top, 1f)
                     val detObj = JSONObject().apply {
                         put("classe", cx.estado.rotulo)
-                        put("confianca", cx.confianca.toDouble())
-                        put("x", cx.normLeft.toDouble())
-                        put("y", cx.normTop.toDouble())
-                        put("largura", (cx.normRight - cx.normLeft).toDouble())
-                        put("altura", (cx.normBottom - cx.normTop).toDouble())
+                        put("confianca", cx.confianca.coerceIn(0f, 1f).toDouble())
+                        put("x", left.toDouble())
+                        put("y", top.toDouble())
+                        put("largura", (right - left).coerceIn(0f, 1f).toDouble())
+                        put("altura", (bottom - top).coerceIn(0f, 1f).toDouble())
                     }
                     deteccoesArray.put(detObj)
                 }
@@ -205,21 +209,19 @@ object CacauSyncClient {
 
             onProgresso("Enviando fotos (${idx + 1}/${registros.size})...")
 
-            val fotoBytes = prepararFotoBytes(context, reg.uri)
+            val isNaoColetavel = reg.diagnostico.equals("Não Coletável", ignoreCase = true)
+            val fotoBytes = if (isNaoColetavel || reg.uri == Uri.EMPTY) null else prepararFotoBytes(context, reg.uri)
             if (fotoBytes != null && fotoBytes.isNotEmpty()) {
                 val sucessoFoto = uploadFoto(baseUrl, token, leituraId, reg.plantId, fotoBytes)
                 if (sucessoFoto) {
                     fotosEnviadas++
-                    reg.statusSync = "SINCRONIZADO"
                     onStatusRegistro?.invoke(reg.plantId, "SINCRONIZADO")
                 } else {
                     mensagens.add("Não foi possível enviar a foto da planta ${reg.plantId}")
-                    reg.statusSync = "ERRO"
                     onStatusRegistro?.invoke(reg.plantId, "ERRO")
                 }
             } else {
                 // Leitura sem foto (ex: planta não coletável / seca)
-                reg.statusSync = "SINCRONIZADO"
                 onStatusRegistro?.invoke(reg.plantId, "SINCRONIZADO")
             }
         }
@@ -295,10 +297,11 @@ object CacauSyncClient {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, boundsOptions)
             }
+            if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
 
             val maxDim = 1600
             var sampleSize = 1
-            while (boundsOptions.outWidth / (sampleSize * 2) >= maxDim || boundsOptions.outHeight / (sampleSize * 2) >= maxDim) {
+            while ((boundsOptions.outWidth / sampleSize) > maxDim || (boundsOptions.outHeight / sampleSize) > maxDim) {
                 sampleSize *= 2
             }
 
