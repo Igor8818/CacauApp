@@ -66,8 +66,11 @@ object PersistenciaLocalRegistros {
     fun carregarRegistros(context: Context): List<RegistroCacau> {
         synchronized(fileLock) {
             val baseFile = File(context.filesDir, FILE_NAME)
+            val backupFile = File(context.filesDir, "$FILE_NAME.bak")
             val atomicFile = AtomicFile(baseFile)
-            if (!baseFile.exists()) return emptyList()
+
+            // Permite que o AtomicFile recupere automaticamente o .bak se o app foi morto durante uma gravação anterior
+            if (!baseFile.exists() && !backupFile.exists()) return emptyList()
 
             return try {
                 val bytes = atomicFile.readFully()
