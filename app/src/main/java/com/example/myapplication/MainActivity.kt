@@ -410,10 +410,6 @@ fun TelaPrincipalCapturaOtimizada(
         onDispose { detectorHelper.fechar() }
     }
 
-    DisposableEffect(detectorHelper) {
-        onDispose { detectorHelper.fechar() }
-    }
-
     val isCloneValido = cloneVal.isNotBlank() &&
             (if (isNum2) true else parcelaTxt.isNotBlank()) &&
             (if (isNum3) true else plantaTxt.isNotBlank())
@@ -548,11 +544,18 @@ fun TelaPrincipalCapturaOtimizada(
                     val pEx = if (isNum2) parcelaNum.toString() else parcelaTxt
                     val plEx = if (isNum3) plantaNum.toString() else plantaTxt
                     val idParaArquivo = "${cloneVal}_${label2}${pEx}_${label3}${plEx}"
+
+                    // Snapshot síncrono das detecções e dimensões no exato momento do clique do obturador
+                    // para evitar race condition com a thread de inferência durante o delay do hardware/JPEG
+                    val caixasSnapshot = listaFiltrada.toList()
+                    val widthSnapshot = detectorHelper.lastBitmapWidth
+                    val heightSnapshot = detectorHelper.lastBitmapHeight
+
                     tirarFoto(context, imageCapture, idParaArquivo) { uri ->
                         idParaRevisao = idParaArquivo
-                        caixasCapturadas = listaFiltrada
-                        bitmapWidthCapturado = detectorHelper.lastBitmapWidth
-                        bitmapHeightCapturado = detectorHelper.lastBitmapHeight
+                        caixasCapturadas = caixasSnapshot
+                        bitmapWidthCapturado = widthSnapshot
+                        bitmapHeightCapturado = heightSnapshot
                         fotoParaRevisao = uri
                     }
                 },
@@ -767,10 +770,17 @@ fun TelaModoFieldBook(
                 ExtendedFloatingActionButton(
                     onClick = {
                         val idParaArquivo = "${pontoAtual.clone}_P${pontoAtual.parcela}_Pl${pontoAtual.planta}"
+
+                        // Snapshot síncrono das detecções e dimensões no exato momento do clique do obturador
+                        // para evitar race condition com a thread de inferência durante o delay do hardware/JPEG
+                        val caixasSnapshot = listaFiltrada.toList()
+                        val widthSnapshot = detectorHelper.lastBitmapWidth
+                        val heightSnapshot = detectorHelper.lastBitmapHeight
+
                         tirarFoto(context, imageCapture, idParaArquivo) { uri ->
-                            caixasCapturadas = listaFiltrada
-                            bitmapWidthCapturado = detectorHelper.lastBitmapWidth
-                            bitmapHeightCapturado = detectorHelper.lastBitmapHeight
+                            caixasCapturadas = caixasSnapshot
+                            bitmapWidthCapturado = widthSnapshot
+                            bitmapHeightCapturado = heightSnapshot
                             fotoParaRevisao = uri
                         }
                     },
@@ -1091,11 +1101,10 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                         }
                     )
 
-                    // I/O de disco rodando com segurança fora da thread de renderização da UI
-                    PersistenciaLocalRegistros.salvarRegistros(context, registros)
-
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         sincronizando = false
+                        // Gravação em disco thread-safe com todos os status de sincronização devidamente atualizados
+                        PersistenciaLocalRegistros.salvarRegistros(context, registros)
                         if (syncRes.isSuccess) {
                             val res = syncRes.getOrThrow()
                             var resumo = "Sincronização concluída com sucesso!\n\n" +

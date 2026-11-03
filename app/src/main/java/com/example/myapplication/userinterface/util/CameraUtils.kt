@@ -14,6 +14,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,29 @@ fun CameraWithAI(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val providerFuture = remember { ProcessCameraProvider.getInstance(context) }
+    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
+
+    // Registra listener thread-safe direcionado à MainLooper e desvincula a câmera ao sair da tela
+    DisposableEffect(helper, lifecycleOwner) {
+        helper.setListener(object : ObjectDetectorHelper.DetectorListener {
+            override fun onResults(results: List<Detection>) {
+                mainExecutor.execute {
+                    onResultsUpdated(results)
+                }
+            }
+            override fun onError(mensagem: String) {
+                Log.e("CameraAI", "Detector: $mensagem")
+            }
+        })
+        onDispose {
+            try {
+                if (providerFuture.isDone) {
+                    providerFuture.get().unbindAll()
+                }
+            } catch (_: Exception) {}
+            helper.setListener(null)
+        }
+    }
 
     androidx.compose.ui.viewinterop.AndroidView(factory = { ctx ->
         val view = PreviewView(ctx).apply {
@@ -100,15 +124,6 @@ fun CameraWithAI(
                                 rawBitmap
                             }
 
-                            helper.setListener(object : ObjectDetectorHelper.DetectorListener {
-                                override fun onResults(results: List<Detection>) {
-                                    onResultsUpdated(results)
-                                }
-                                override fun onError(mensagem: String) {
-                                    Log.e("CameraAI", "Detector: $mensagem")
-                                }
-                            })
-
                             helper.detect(processedBitmap)
 
                         } catch (e: Exception) {
@@ -133,7 +148,7 @@ fun CameraWithAI(
                 CameraSelector.DEFAULT_BACK_CAMERA,
                 preview, capture, analyzer
             )
-        }, ContextCompat.getMainExecutor(ctx))
+        }, mainExecutor)
         view
     }, modifier = Modifier.fillMaxSize())
 }

@@ -45,6 +45,7 @@ class ObjectDetectorHelper(
         data class InternalFile(val path: String, val displayName: String) : ModelSource()
     }
 
+    private val lock = Any()
     private var interpreter: Interpreter? = null
 
     private enum class ModelArchitecture {
@@ -83,8 +84,10 @@ class ObjectDetectorHelper(
     var ultimoErro: String? = null
         private set
 
+    @Volatile
     var lastBitmapWidth: Float = 1f
         private set
+    @Volatile
     var lastBitmapHeight: Float = 1f
         private set
 
@@ -94,19 +97,25 @@ class ObjectDetectorHelper(
         setup()
     }
 
-    fun setListener(l: DetectorListener) {
-        detectorListener = l
+    fun setListener(l: DetectorListener?) {
+        synchronized(lock) {
+            detectorListener = l
+        }
     }
 
     fun reloadModel(source: ModelSource, threshold: Float = scoreThreshold, maxRes: Int = maxResults) {
-        close()
-        modelSource = source
-        scoreThreshold = threshold
-        maxResults = maxRes
-        ultimoErro = null
-        loadedPath = null
-        setup()
+        synchronized(lock) {
+            close()
+            modelSource = source
+            scoreThreshold = threshold
+            maxResults = maxRes
+            ultimoErro = null
+            loadedPath = null
+            setup()
+        }
     }
+
+    fun fechar() = synchronized(lock) { close() }
 
     private fun setup() {
         val file = resolveFile() ?: return
@@ -237,232 +246,241 @@ class ObjectDetectorHelper(
     }
 
     fun detect(image: Bitmap) {
-        lastBitmapWidth = image.width.toFloat()
-        lastBitmapHeight = image.height.toFloat()
-        val interp = interpreter ?: run { setup(); interpreter ?: return }
+        val finalDetections = mutableListOf<Detection>()
+        var listener: DetectorListener? = null
 
-        try {
-            val imgW = image.width.toFloat()
-            val imgH = image.height.toFloat()
+        synchronized(lock) {
+            lastBitmapWidth = image.width.toFloat()
+            lastBitmapHeight = image.height.toFloat()
+            val interp = interpreter ?: run { setup(); interpreter ?: return }
 
-            // 1. Prepara buffer de entrada via Letterbox Isomórfico (mantém proporção original do fruto sem achatamento)
-            val scale = min(inputWidth.toFloat() / imgW, inputHeight.toFloat() / imgH)
-            val newW = kotlin.math.round(imgW * scale).toInt().coerceAtLeast(1)
-            val newH = kotlin.math.round(imgH * scale).toInt().coerceAtLeast(1)
-            val padX = (inputWidth - newW) / 2f
-            val padY = (inputHeight - newH) / 2f
+            try {
+                val imgW = image.width.toFloat()
+                val imgH = image.height.toFloat()
 
-            var lbBitmap = letterboxBitmap
-            if (lbBitmap == null || lbBitmap.width != inputWidth || lbBitmap.height != inputHeight) {
-                lbBitmap?.recycle()
-                lbBitmap = Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888)
-                letterboxBitmap = lbBitmap
-            }
+                // 1. Prepara buffer de entrada via Letterbox Isomórfico (mantém proporção original do fruto sem achatamento)
+                val scale = min(inputWidth.toFloat() / imgW, inputHeight.toFloat() / imgH)
+                val newW = kotlin.math.round(imgW * scale).toInt().coerceAtLeast(1)
+                val newH = kotlin.math.round(imgH * scale).toInt().coerceAtLeast(1)
+                val padX = (inputWidth - newW) / 2f
+                val padY = (inputHeight - newH) / 2f
 
-            val canvas = Canvas(lbBitmap)
-            // Cor padrão cinza neutro do Ultralytics YOLO: RGB(114, 114, 114)
-            canvas.drawColor(Color.rgb(114, 114, 114))
-            val destRect = RectF(padX, padY, padX + newW, padY + newH)
-            canvas.drawBitmap(image, null, destRect, letterboxPaint)
-
-            var pixels = letterboxPixels
-            val totalPixels = inputWidth * inputHeight
-            if (pixels == null || pixels.size != totalPixels) {
-                pixels = IntArray(totalPixels)
-                letterboxPixels = pixels
-            }
-            lbBitmap.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
-
-            val bytesPerChannel = if (isInputUint8) 1 else 4
-            val bufferCapacity = totalPixels * 3 * bytesPerChannel
-            var buf = inputByteBuffer
-            if (buf == null || buf.capacity() != bufferCapacity) {
-                buf = ByteBuffer.allocateDirect(bufferCapacity).order(ByteOrder.nativeOrder())
-                inputByteBuffer = buf
-            } else {
-                buf.rewind()
-            }
-
-            if (isInputUint8) {
-                for (px in pixels) {
-                    buf.put(((px shr 16) and 0xFF).toByte())
-                    buf.put(((px shr 8)  and 0xFF).toByte())
-                    buf.put((px          and 0xFF).toByte())
+                var lbBitmap = letterboxBitmap
+                if (lbBitmap == null || lbBitmap.width != inputWidth || lbBitmap.height != inputHeight) {
+                    lbBitmap?.recycle()
+                    lbBitmap = Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888)
+                    letterboxBitmap = lbBitmap
                 }
-            } else {
-                for (px in pixels) {
-                    buf.putFloat(((px shr 16) and 0xFF) / 255f)
-                    buf.putFloat(((px shr 8)  and 0xFF) / 255f)
-                    buf.putFloat((px          and 0xFF) / 255f)
+
+                val canvas = Canvas(lbBitmap)
+                // Cor padrão cinza neutro do Ultralytics YOLO: RGB(114, 114, 114)
+                canvas.drawColor(Color.rgb(114, 114, 114))
+                val destRect = RectF(padX, padY, padX + newW, padY + newH)
+                canvas.drawBitmap(image, null, destRect, letterboxPaint)
+
+                var pixels = letterboxPixels
+                val totalPixels = inputWidth * inputHeight
+                if (pixels == null || pixels.size != totalPixels) {
+                    pixels = IntArray(totalPixels)
+                    letterboxPixels = pixels
                 }
-            }
+                lbBitmap.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
 
-            val finalDetections = mutableListOf<Detection>()
+                val bytesPerChannel = if (isInputUint8) 1 else 4
+                val bufferCapacity = totalPixels * 3 * bytesPerChannel
+                var buf = inputByteBuffer
+                if (buf == null || buf.capacity() != bufferCapacity) {
+                    buf = ByteBuffer.allocateDirect(bufferCapacity).order(ByteOrder.nativeOrder())
+                    inputByteBuffer = buf
+                } else {
+                    buf.rewind()
+                }
 
-            // 2. Executa inferência de acordo com a arquitetura
-            if (architecture == ModelArchitecture.SSD_POST_PROCESS) {
-                val maxDets = ssdNumDetections.coerceAtLeast(1)
-                val locations = Array(1) { Array(maxDets) { FloatArray(4) } }
-                val classes = Array(1) { FloatArray(maxDets) }
-                val scores = Array(1) { FloatArray(maxDets) }
-                val count = FloatArray(1)
+                if (isInputUint8) {
+                    for (px in pixels) {
+                        buf.put(((px shr 16) and 0xFF).toByte())
+                        buf.put(((px shr 8)  and 0xFF).toByte())
+                        buf.put((px          and 0xFF).toByte())
+                    }
+                } else {
+                    for (px in pixels) {
+                        buf.putFloat(((px shr 16) and 0xFF) / 255f)
+                        buf.putFloat(((px shr 8)  and 0xFF) / 255f)
+                        buf.putFloat((px          and 0xFF) / 255f)
+                    }
+                }
 
-                val outputMap = HashMap<Int, Any>()
-                outputMap[ssdBoxIndex] = locations
-                outputMap[ssdClassIndex] = classes
-                outputMap[ssdScoreIndex] = scores
-                outputMap[ssdCountIndex] = count
+                val finalDetections = mutableListOf<Detection>()
 
-                interp.runForMultipleInputsOutputs(arrayOf(buf), outputMap)
+                // 2. Executa inferência de acordo com a arquitetura
+                if (architecture == ModelArchitecture.SSD_POST_PROCESS) {
+                    val maxDets = ssdNumDetections.coerceAtLeast(1)
+                    val locations = Array(1) { Array(maxDets) { FloatArray(4) } }
+                    val classes = Array(1) { FloatArray(maxDets) }
+                    val scores = Array(1) { FloatArray(maxDets) }
+                    val count = FloatArray(1)
 
-                val numDetected = min(count[0].toInt(), maxDets).coerceAtLeast(0)
+                    val outputMap = HashMap<Int, Any>()
+                    outputMap[ssdBoxIndex] = locations
+                    outputMap[ssdClassIndex] = classes
+                    outputMap[ssdScoreIndex] = scores
+                    outputMap[ssdCountIndex] = count
 
-                for (i in 0 until numDetected) {
-                    val score = scores[0][i]
-                    if (score < scoreThreshold) continue
+                    interp.runForMultipleInputsOutputs(arrayOf(buf), outputMap)
 
-                    val classIdx = classes[0][i].toInt()
-                    val ymin = locations[0][i][0]
-                    val xmin = locations[0][i][1]
-                    val ymax = locations[0][i][2]
-                    val xmax = locations[0][i][3]
+                    val numDetected = min(count[0].toInt(), maxDets).coerceAtLeast(0)
 
-                    val x1Tensor = xmin * inputWidth
-                    val y1Tensor = ymin * inputHeight
-                    val x2Tensor = xmax * inputWidth
-                    val y2Tensor = ymax * inputHeight
+                    for (i in 0 until numDetected) {
+                        val score = scores[0][i]
+                        if (score < scoreThreshold) continue
 
-                    val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
-                    val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
-                    val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
-                    val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
+                        val classIdx = classes[0][i].toInt()
+                        val ymin = locations[0][i][0]
+                        val xmin = locations[0][i][1]
+                        val ymax = locations[0][i][2]
+                        val xmax = locations[0][i][3]
 
-                    if (right <= left || bottom <= top) continue
+                        val x1Tensor = xmin * inputWidth
+                        val y1Tensor = ymin * inputHeight
+                        val x2Tensor = xmax * inputWidth
+                        val y2Tensor = ymax * inputHeight
 
-                    val label = if (modelLabels.isNotEmpty()) {
-                        modelLabels.getOrNull(classIdx) ?: "cacau"
-                    } else {
-                        "cacau"
+                        val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
+                        val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
+                        val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
+                        val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
+
+                        if (right <= left || bottom <= top) continue
+
+                        val label = if (modelLabels.isNotEmpty()) {
+                            modelLabels.getOrNull(classIdx) ?: "cacau"
+                        } else {
+                            "cacau"
+                        }
+
+                        finalDetections.add(
+                            Detection.create(
+                                RectF(left, top, right, bottom),
+                                listOf(Category.create(label, label, score))
+                            )
+                        )
+
+                        if (finalDetections.size >= maxResults) break
                     }
 
-                    finalDetections.add(
-                        Detection.create(
-                            RectF(left, top, right, bottom),
-                            listOf(Category.create(label, label, score))
-                        )
-                    )
+                } else {
+                    // Inferência YOLO raw (ex: YOLOv8 1x5x8400)
+                    val out = if (yoloTransposed)
+                        Array(1) { Array(4 + yoloNumClasses) { FloatArray(yoloNumAnchors) } } as Array<Array<FloatArray>>
+                    else
+                        Array(1) { Array(yoloNumAnchors) { FloatArray(4 + yoloNumClasses) } } as Array<Array<FloatArray>>
 
-                    if (finalDetections.size >= maxResults) break
-                }
+                    interp.run(buf, out)
 
-            } else {
-                // Inferência YOLO raw (ex: YOLOv8 1x5x8400)
-                val out = if (yoloTransposed)
-                    Array(1) { Array(4 + yoloNumClasses) { FloatArray(yoloNumAnchors) } } as Array<Array<FloatArray>>
-                else
-                    Array(1) { Array(yoloNumAnchors) { FloatArray(4 + yoloNumClasses) } } as Array<Array<FloatArray>>
+                    // Verifica se coordenadas das âncoras estão em pixels (0..inputWidth) ou normalizadas (0..1)
+                    val sampleCx = if (yoloTransposed) out[0][0][0] else out[0][0][0]
+                    val sampleW  = if (yoloTransposed) out[0][2][0] else out[0][0][2]
+                    val coordsArePixels = (sampleCx > 2.0f || sampleW > 2.0f)
+                    val scaleX = if (coordsArePixels) (1f / inputWidth.toFloat()) else 1f
+                    val scaleY = if (coordsArePixels) (1f / inputHeight.toFloat()) else 1f
 
-                interp.run(buf, out)
+                    // Verifica se precisa de sigmoid (no YOLOv8 exportado com Logistic op, os scores já vêm em [0..1])
+                    val sampleScore = if (yoloTransposed) out[0][4][0] else out[0][0][4]
+                    val needsSigmoid = (sampleScore < 0f || sampleScore > 1f)
 
-                // Verifica se coordenadas das âncoras estão em pixels (0..inputWidth) ou normalizadas (0..1)
-                val sampleCx = if (yoloTransposed) out[0][0][0] else out[0][0][0]
-                val sampleW  = if (yoloTransposed) out[0][2][0] else out[0][0][2]
-                val coordsArePixels = (sampleCx > 2.0f || sampleW > 2.0f)
-                val scaleX = if (coordsArePixels) (1f / inputWidth.toFloat()) else 1f
-                val scaleY = if (coordsArePixels) (1f / inputHeight.toFloat()) else 1f
+                    val candidates = mutableListOf<FloatArray>() // [normCx, normCy, normW, normH, prob, classIdx]
 
-                // Verifica se precisa de sigmoid (no YOLOv8 exportado com Logistic op, os scores já vêm em [0..1])
-                val sampleScore = if (yoloTransposed) out[0][4][0] else out[0][0][4]
-                val needsSigmoid = (sampleScore < 0f || sampleScore > 1f)
+                    for (i in 0 until yoloNumAnchors) {
+                        val normCx: Float
+                        val normCy: Float
+                        val normW: Float
+                        val normH: Float
+                        var rawScore = -Float.MAX_VALUE
+                        var bestClass = 0
 
-                val candidates = mutableListOf<FloatArray>() // [normCx, normCy, normW, normH, prob, classIdx]
-
-                for (i in 0 until yoloNumAnchors) {
-                    val normCx: Float
-                    val normCy: Float
-                    val normW: Float
-                    val normH: Float
-                    var rawScore = -Float.MAX_VALUE
-                    var bestClass = 0
-
-                    if (yoloTransposed) {
-                        normCx = out[0][0][i] * scaleX
-                        normCy = out[0][1][i] * scaleY
-                        normW  = out[0][2][i] * scaleX
-                        normH  = out[0][3][i] * scaleY
-                        for (c in 0 until yoloNumClasses) {
-                            val s = out[0][4 + c][i]
-                            if (s > rawScore) {
-                                rawScore = s
-                                bestClass = c
+                        if (yoloTransposed) {
+                            normCx = out[0][0][i] * scaleX
+                            normCy = out[0][1][i] * scaleY
+                            normW  = out[0][2][i] * scaleX
+                            normH  = out[0][3][i] * scaleY
+                            for (c in 0 until yoloNumClasses) {
+                                val s = out[0][4 + c][i]
+                                if (s > rawScore) {
+                                    rawScore = s
+                                    bestClass = c
+                                }
+                            }
+                        } else {
+                            normCx = out[0][i][0] * scaleX
+                            normCy = out[0][i][1] * scaleY
+                            normW  = out[0][i][2] * scaleX
+                            normH  = out[0][i][3] * scaleY
+                            for (c in 0 until yoloNumClasses) {
+                                val s = out[0][i][4 + c]
+                                if (s > rawScore) {
+                                    rawScore = s
+                                    bestClass = c
+                                }
                             }
                         }
-                    } else {
-                        normCx = out[0][i][0] * scaleX
-                        normCy = out[0][i][1] * scaleY
-                        normW  = out[0][i][2] * scaleX
-                        normH  = out[0][i][3] * scaleY
-                        for (c in 0 until yoloNumClasses) {
-                            val s = out[0][i][4 + c]
-                            if (s > rawScore) {
-                                rawScore = s
-                                bestClass = c
-                            }
+
+                        val prob = if (needsSigmoid) sigmoid(rawScore) else rawScore.coerceIn(0f, 1f)
+
+                        // Filtra: score >= threshold e tamanho de fruto realista (2% a 95% do quadro)
+                        if (prob >= scoreThreshold &&
+                            normW > 0.02f && normH > 0.02f &&
+                            normW < 0.95f && normH < 0.95f &&
+                            normCx > 0.01f && normCy > 0.01f &&
+                            normCx < 0.99f && normCy < 0.99f
+                        ) {
+                            candidates.add(floatArrayOf(normCx, normCy, normW, normH, prob, bestClass.toFloat()))
                         }
                     }
 
-                    val prob = if (needsSigmoid) sigmoid(rawScore) else rawScore.coerceIn(0f, 1f)
+                    // Aplica Non-Maximum Suppression (NMS) para eliminar caixas duplicadas sobre o mesmo fruto
+                    val nmsResult = nms(candidates, iouThresh = 0.45f).take(maxResults)
 
-                    // Filtra: score >= threshold e tamanho de fruto realista (2% a 95% do quadro)
-                    if (prob >= scoreThreshold &&
-                        normW > 0.02f && normH > 0.02f &&
-                        normW < 0.95f && normH < 0.95f &&
-                        normCx > 0.01f && normCy > 0.01f &&
-                        normCx < 0.99f && normCy < 0.99f
-                    ) {
-                        candidates.add(floatArrayOf(normCx, normCy, normW, normH, prob, bestClass.toFloat()))
-                    }
-                }
+                    for (box in nmsResult) {
+                        val x1Tensor = (box[0] - box[2] / 2f) * inputWidth
+                        val y1Tensor = (box[1] - box[3] / 2f) * inputHeight
+                        val x2Tensor = (box[0] + box[2] / 2f) * inputWidth
+                        val y2Tensor = (box[1] + box[3] / 2f) * inputHeight
 
-                // Aplica Non-Maximum Suppression (NMS) para eliminar caixas duplicadas sobre o mesmo fruto
-                val nmsResult = nms(candidates, iouThresh = 0.45f).take(maxResults)
+                        val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
+                        val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
+                        val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
+                        val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
 
-                for (box in nmsResult) {
-                    val x1Tensor = (box[0] - box[2] / 2f) * inputWidth
-                    val y1Tensor = (box[1] - box[3] / 2f) * inputHeight
-                    val x2Tensor = (box[0] + box[2] / 2f) * inputWidth
-                    val y2Tensor = (box[1] + box[3] / 2f) * inputHeight
+                        if (right <= left || bottom <= top) continue
 
-                    val left   = ((x1Tensor - padX) / scale).coerceIn(0f, imgW)
-                    val top    = ((y1Tensor - padY) / scale).coerceIn(0f, imgH)
-                    val right  = ((x2Tensor - padX) / scale).coerceIn(0f, imgW)
-                    val bottom = ((y2Tensor - padY) / scale).coerceIn(0f, imgH)
+                        val classIdx = box[5].toInt()
+                        val label = if (modelLabels.isNotEmpty()) {
+                            modelLabels.getOrNull(classIdx) ?: "cacau"
+                        } else {
+                            "cacau"
+                        }
 
-                    if (right <= left || bottom <= top) continue
-
-                    val classIdx = box[5].toInt()
-                    val label = if (modelLabels.isNotEmpty()) {
-                        modelLabels.getOrNull(classIdx) ?: "cacau"
-                    } else {
-                        "cacau"
-                    }
-
-                    finalDetections.add(
-                        Detection.create(
-                            RectF(left, top, right, bottom),
-                            listOf(Category.create(label, label, box[4]))
+                        finalDetections.add(
+                            Detection.create(
+                                RectF(left, top, right, bottom),
+                                listOf(Category.create(label, label, box[4]))
+                            )
                         )
-                    )
+                    }
                 }
+
+                Log.d("Detector", "Detecções encontradas: ${finalDetections.size}")
+                listener = detectorListener
+
+            } catch (e: Exception) {
+                Log.e("Detector", "Erro na detecção: ${e.message}", e)
+                finalDetections.clear()
+                listener = detectorListener
             }
-
-            Log.d("Detector", "Detecções encontradas: ${finalDetections.size}")
-            detectorListener?.onResults(finalDetections)
-
-        } catch (e: Exception) {
-            Log.e("Detector", "Erro na detecção: ${e.message}", e)
-            detectorListener?.onResults(emptyList())
         }
+
+        // Notifica o listener FORA do synchronized(lock) para evitar risco de deadlocks e contenção de locks
+        listener?.onResults(finalDetections)
     }
 
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
@@ -526,8 +544,6 @@ class ObjectDetectorHelper(
             null
         }
     }
-
-    fun fechar() = close()
 
     private fun close() {
         interpreter?.close()
