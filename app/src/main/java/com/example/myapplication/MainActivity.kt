@@ -376,7 +376,7 @@ fun TelaPrincipalCapturaOtimizada(
     var cameraAtiva by remember { mutableStateOf(false) }
     var menuClonesExpandido by remember { mutableStateOf(false) }
     var mostrarDialogLabels by remember { mutableStateOf(false) }
-    var deteccoesAtuais by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    var resultadoDeteccaoAtual by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
 
     var fotoParaRevisao by remember { mutableStateOf<Uri?>(null) }
     var idParaRevisao by remember { mutableStateOf("") }
@@ -397,9 +397,7 @@ fun TelaPrincipalCapturaOtimizada(
         }
         ObjectDetectorHelper(
             context = context,
-            detectorListener = object : ObjectDetectorHelper.DetectorListener {
-                override fun onResults(results: List<Detection>) { deteccoesAtuais = results }
-            },
+            detectorListener = null,
             modelSource = source,
             scoreThreshold = modelConfig.threshold,
             maxResults = modelConfig.maxResultados
@@ -512,7 +510,11 @@ fun TelaPrincipalCapturaOtimizada(
         }
     } else {
         Box(Modifier.fillMaxSize()) {
-            CameraWithAI(detectorHelper, imageCapture) { deteccoesAtuais = it }
+            CameraWithAI(detectorHelper, imageCapture) { resultadoDeteccaoAtual = it }
+
+            val deteccoesAtuais = resultadoDeteccaoAtual?.deteccoes ?: emptyList()
+            val frameWidth = resultadoDeteccaoAtual?.larguraImagem ?: 1f
+            val frameHeight = resultadoDeteccaoAtual?.alturaImagem ?: 1f
 
             // Filtra usando os labels da config (vazio = aceita tudo)
             val listaFiltrada = deteccoesAtuais.filter { det ->
@@ -527,8 +529,8 @@ fun TelaPrincipalCapturaOtimizada(
 
             BoundingBoxOverlay(
                 detections = listaFiltrada,
-                bitmapWidth = detectorHelper.lastBitmapWidth,
-                bitmapHeight = detectorHelper.lastBitmapHeight,
+                bitmapWidth = frameWidth,
+                bitmapHeight = frameHeight,
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -545,11 +547,10 @@ fun TelaPrincipalCapturaOtimizada(
                     val plEx = if (isNum3) plantaNum.toString() else plantaTxt
                     val idParaArquivo = "${cloneVal}_${label2}${pEx}_${label3}${plEx}"
 
-                    // Snapshot síncrono das detecções e dimensões no exato momento do clique do obturador
-                    // para evitar race condition com a thread de inferência durante o delay do hardware/JPEG
+                    // Snapshot atômico de detecções e dimensões do mesmo frame no exato momento do clique
                     val caixasSnapshot = listaFiltrada.toList()
-                    val widthSnapshot = detectorHelper.lastBitmapWidth
-                    val heightSnapshot = detectorHelper.lastBitmapHeight
+                    val widthSnapshot = frameWidth
+                    val heightSnapshot = frameHeight
 
                     tirarFoto(context, imageCapture, idParaArquivo) { uri ->
                         idParaRevisao = idParaArquivo
@@ -624,7 +625,7 @@ fun TelaModoFieldBook(
     val context = LocalContext.current
     var indiceAtual by rememberSaveable { mutableIntStateOf(0) }
     var cameraAtiva by remember { mutableStateOf(false) }
-    var deteccoesAtuais by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    var resultadoDeteccaoAtual by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
     var fotoParaRevisao by remember { mutableStateOf<Uri?>(null) }
     var caixasCapturadas by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var bitmapWidthCapturado by remember { mutableFloatStateOf(1f) }
@@ -641,9 +642,7 @@ fun TelaModoFieldBook(
         }
         ObjectDetectorHelper(
             context = context,
-            detectorListener = object : ObjectDetectorHelper.DetectorListener {
-                override fun onResults(results: List<Detection>) { deteccoesAtuais = results }
-            },
+            detectorListener = null,
             modelSource = source,
             scoreThreshold = modelConfig.threshold,
             maxResults = modelConfig.maxResultados
@@ -744,7 +743,11 @@ fun TelaModoFieldBook(
             }
         } else {
             Box(Modifier.fillMaxSize()) {
-                CameraWithAI(detectorHelper, imageCapture) { deteccoesAtuais = it }
+                CameraWithAI(detectorHelper, imageCapture) { resultadoDeteccaoAtual = it }
+
+                val deteccoesAtuais = resultadoDeteccaoAtual?.deteccoes ?: emptyList()
+                val frameWidth = resultadoDeteccaoAtual?.larguraImagem ?: 1f
+                val frameHeight = resultadoDeteccaoAtual?.alturaImagem ?: 1f
 
                 val listaFiltrada = deteccoesAtuais.filter { det ->
                     val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
@@ -758,8 +761,8 @@ fun TelaModoFieldBook(
 
                 BoundingBoxOverlay(
                     detections = listaFiltrada,
-                    bitmapWidth = detectorHelper.lastBitmapWidth,
-                    bitmapHeight = detectorHelper.lastBitmapHeight,
+                    bitmapWidth = frameWidth,
+                    bitmapHeight = frameHeight,
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -771,11 +774,10 @@ fun TelaModoFieldBook(
                     onClick = {
                         val idParaArquivo = "${pontoAtual.clone}_P${pontoAtual.parcela}_Pl${pontoAtual.planta}"
 
-                        // Snapshot síncrono das detecções e dimensões no exato momento do clique do obturador
-                        // para evitar race condition com a thread de inferência durante o delay do hardware/JPEG
+                        // Snapshot atômico de detecções e dimensões do mesmo frame no exato momento do clique
                         val caixasSnapshot = listaFiltrada.toList()
-                        val widthSnapshot = detectorHelper.lastBitmapWidth
-                        val heightSnapshot = detectorHelper.lastBitmapHeight
+                        val widthSnapshot = frameWidth
+                        val heightSnapshot = frameHeight
 
                         tirarFoto(context, imageCapture, idParaArquivo) { uri ->
                             caixasCapturadas = caixasSnapshot

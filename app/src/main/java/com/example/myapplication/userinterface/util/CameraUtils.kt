@@ -46,7 +46,7 @@ private fun Bitmap.rotatedBy(degrees: Int): Bitmap {
 fun CameraWithAI(
     helper: ObjectDetectorHelper,
     capture: ImageCapture,
-    onResultsUpdated: (List<Detection>) -> Unit
+    onResultsUpdated: (ObjectDetectorHelper.ResultadoDeteccao) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -56,9 +56,9 @@ fun CameraWithAI(
     // Registra listener thread-safe direcionado à MainLooper e desvincula a câmera ao sair da tela
     DisposableEffect(helper, lifecycleOwner) {
         helper.setListener(object : ObjectDetectorHelper.DetectorListener {
-            override fun onResults(results: List<Detection>) {
+            override fun onResults(resultado: ObjectDetectorHelper.ResultadoDeteccao) {
                 mainExecutor.execute {
-                    onResultsUpdated(results)
+                    onResultsUpdated(resultado)
                 }
             }
             override fun onError(mensagem: String) {

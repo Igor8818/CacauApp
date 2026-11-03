@@ -46,6 +46,7 @@ class ObjectDetectorHelper(
     }
 
     private val lock = Any()
+    private var isClosed = false
     private var interpreter: Interpreter? = null
 
     private enum class ModelArchitecture {
@@ -106,6 +107,7 @@ class ObjectDetectorHelper(
     fun reloadModel(source: ModelSource, threshold: Float = scoreThreshold, maxRes: Int = maxResults) {
         synchronized(lock) {
             close()
+            isClosed = false
             modelSource = source
             scoreThreshold = threshold
             maxResults = maxRes
@@ -115,7 +117,10 @@ class ObjectDetectorHelper(
         }
     }
 
-    fun fechar() = synchronized(lock) { close() }
+    fun fechar() = synchronized(lock) {
+        isClosed = true
+        close()
+    }
 
     private fun setup() {
         val file = resolveFile() ?: return
@@ -246,13 +251,19 @@ class ObjectDetectorHelper(
     }
 
     fun detect(image: Bitmap) {
-        val finalDetections = mutableListOf<Detection>()
+        var resultadoFinal: ResultadoDeteccao? = null
         var listener: DetectorListener? = null
 
         synchronized(lock) {
-            lastBitmapWidth = image.width.toFloat()
-            lastBitmapHeight = image.height.toFloat()
+            if (isClosed) return
+
+            val imgW = image.width.toFloat()
+            val imgH = image.height.toFloat()
+            lastBitmapWidth = imgW
+            lastBitmapHeight = imgH
+
             val interp = interpreter ?: run { setup(); interpreter ?: return }
+            val finalDetections = mutableListOf<Detection>()
 
             try {
                 val imgW = image.width.toFloat()
@@ -309,8 +320,6 @@ class ObjectDetectorHelper(
                         buf.putFloat((px          and 0xFF) / 255f)
                     }
                 }
-
-                val finalDetections = mutableListOf<Detection>()
 
                 // 2. Executa inferência de acordo com a arquitetura
                 if (architecture == ModelArchitecture.SSD_POST_PROCESS) {
@@ -470,17 +479,20 @@ class ObjectDetectorHelper(
                 }
 
                 Log.d("Detector", "Detecções encontradas: ${finalDetections.size}")
+                resultadoFinal = ResultadoDeteccao(finalDetections, imgW, imgH)
                 listener = detectorListener
 
             } catch (e: Exception) {
                 Log.e("Detector", "Erro na detecção: ${e.message}", e)
-                finalDetections.clear()
+                resultadoFinal = ResultadoDeteccao(emptyList(), imgW, imgH)
                 listener = detectorListener
             }
         }
 
-        // Notifica o listener FORA do synchronized(lock) para evitar risco de deadlocks e contenção de locks
-        listener?.onResults(finalDetections)
+        // Notifica o listener FORA do synchronized(lock) com pacote atômico de detecções + dimensões
+        resultadoFinal?.let { res ->
+            listener?.onResults(res)
+        }
     }
 
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
@@ -555,8 +567,14 @@ class ObjectDetectorHelper(
         inputByteBuffer = null
     }
 
+    data class ResultadoDeteccao(
+        val deteccoes: List<Detection>,
+        val larguraImagem: Float,
+        val alturaImagem: Float
+    )
+
     interface DetectorListener {
-        fun onResults(results: List<Detection>)
+        fun onResults(resultado: ResultadoDeteccao)
         fun onError(mensagem: String) {}
     }
 }
