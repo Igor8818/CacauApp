@@ -1051,9 +1051,11 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                         registros = registros,
                         onProgresso = { statusSyncMensagem = it },
                         onStatusRegistro = { pId, novoStatus ->
-                            val idx = registros.indexOfFirst { it.plantId == pId }
-                            if (idx != -1 && registros is SnapshotStateList) {
-                                (registros as SnapshotStateList)[idx] = registros[idx].copy(statusSync = novoStatus)
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                val idx = registros.indexOfFirst { it.plantId == pId }
+                                if (idx != -1 && registros is SnapshotStateList) {
+                                    (registros as SnapshotStateList)[idx] = registros[idx].copy(statusSync = novoStatus)
+                                }
                             }
                         }
                     )

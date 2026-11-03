@@ -232,14 +232,19 @@ class ObjectDetectorHelper(
         lastBitmapHeight = image.height.toFloat()
         val interp = interpreter ?: run { setup(); interpreter ?: return }
 
+        var scaled: Bitmap? = null
         try {
             val imgW = image.width.toFloat()
             val imgH = image.height.toFloat()
 
             // 1. Prepara buffer de entrada
-            val scaled = Bitmap.createScaledBitmap(image, inputWidth, inputHeight, true)
+            scaled = Bitmap.createScaledBitmap(image, inputWidth, inputHeight, true)
             val pixels = IntArray(inputWidth * inputHeight)
             scaled.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
+            if (scaled != image && !scaled.isRecycled) {
+                scaled.recycle()
+                scaled = null
+            }
 
             val buf: ByteBuffer
             if (isInputUint8) {
@@ -413,6 +418,10 @@ class ObjectDetectorHelper(
         } catch (e: Exception) {
             Log.e("Detector", "Erro na detecção: ${e.message}", e)
             detectorListener?.onResults(emptyList())
+        } finally {
+            if (scaled != null && scaled != image && !scaled.isRecycled) {
+                scaled.recycle()
+            }
         }
     }
 

@@ -294,7 +294,7 @@ object CacauSyncClient {
 
             val maxDim = 1600
             var sampleSize = 1
-            while (boundsOptions.outWidth / (sampleSize * 2) >= maxDim && boundsOptions.outHeight / (sampleSize * 2) >= maxDim) {
+            while (boundsOptions.outWidth / (sampleSize * 2) >= maxDim || boundsOptions.outHeight / (sampleSize * 2) >= maxDim) {
                 sampleSize *= 2
             }
 

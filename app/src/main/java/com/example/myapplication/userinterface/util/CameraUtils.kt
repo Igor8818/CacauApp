@@ -87,10 +87,18 @@ fun CameraWithAI(
                         inferenceRunning.set(true)
                         lastInferenceMs.set(now)
 
+                        var rawBitmap: Bitmap? = null
+                        var processedBitmap: Bitmap? = null
                         try {
                             val rotation = proxy.imageInfo.rotationDegrees
-                            val bitmap = proxy.toBitmap().rotatedBy(rotation)
+                            rawBitmap = proxy.toBitmap()
                             proxy.close() // Libera buffer imediatamente
+
+                            processedBitmap = if (rotation != 0) {
+                                rawBitmap.rotatedBy(rotation)
+                            } else {
+                                rawBitmap
+                            }
 
                             helper.setListener(object : ObjectDetectorHelper.DetectorListener {
                                 override fun onResults(results: List<Detection>) {
@@ -101,12 +109,19 @@ fun CameraWithAI(
                                 }
                             })
 
-                            helper.detect(bitmap)
+                            helper.detect(processedBitmap)
 
                         } catch (e: Exception) {
                             Log.e("CameraAI", "Erro no frame: ${e.message}")
                             try { proxy.close() } catch (_: Exception) {}
                         } finally {
+                            // Libera buffers nativos de imagem para mitigar GC churn e manter o preview a 60 FPS
+                            if (processedBitmap != null && processedBitmap != rawBitmap && !processedBitmap.isRecycled) {
+                                processedBitmap.recycle()
+                            }
+                            if (rawBitmap != null && !rawBitmap.isRecycled) {
+                                rawBitmap.recycle()
+                            }
                             inferenceRunning.set(false)
                         }
                     }
