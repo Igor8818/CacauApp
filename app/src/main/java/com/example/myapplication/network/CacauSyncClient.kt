@@ -78,6 +78,72 @@ object CacauSyncClient {
     }
 
     /**
+     * Identifica se o diagnóstico indica que a planta não é coletável (morta, ausente, seca).
+     */
+    fun isNaoColetavel(diagnostico: String?): Boolean {
+        if (diagnostico == null || diagnostico.isBlank()) return false
+        val d = diagnostico.trim().lowercase(java.util.Locale.ROOT)
+        return d == "não coletável" || d == "nao coletavel" ||
+                d.contains("não coletável") || d.contains("nao coletavel") ||
+                d.contains("ausente") || d.contains("morta") || d.contains("seca")
+    }
+
+    /**
+     * Constrói o payload JSON estritamente concordante com a especificação SPEC-001 (SyncJsonRequest).
+     */
+    fun criarPayloadSyncJson(codigoEnsaio: String, registros: List<RegistroCacau>): JSONObject {
+        val leiturasArray = JSONArray()
+        for (reg in registros) {
+            val naoColetavel = isNaoColetavel(reg.diagnostico)
+            val itemObj = JSONObject().apply {
+                put("campanha", reg.ensaioManual.ifBlank { codigoEnsaio })
+                put("plantId", reg.plantId)
+                // Extrai clone do ID ou da parcela
+                val partes = reg.plantId.split("_")
+                val cloneCode = partes.firstOrNull { it.isNotBlank() } ?: "CCN-51"
+                put("clone", cloneCode)
+                put("parcela", reg.parcelaManual.ifBlank { "1" })
+                put("planta", if (reg.numPlanta > 0) reg.numPlanta else 1)
+                put("resultado", if (naoColetavel) "Não Coletável" else reg.totalFrutos.toString())
+                put("data", reg.data)
+                put("lat", reg.lat)
+                put("lng", reg.lng)
+                put("sadios", if (naoColetavel) 0 else reg.sadios)
+                put("vassoura", if (naoColetavel) 0 else reg.vassoura)
+                put("podridao", if (naoColetavel) 0 else reg.podridao)
+                put("naoAvaliavel", if (naoColetavel) 0 else reg.naoAvaliavel)
+
+                // Caixas auditadas do YOLO com confiança real e clamping [0.0, 1.0]
+                val deteccoesArray = JSONArray()
+                if (!naoColetavel) {
+                    for (cx in reg.caixas) {
+                        val left = cx.normLeft.coerceIn(0f, 1f)
+                        val top = cx.normTop.coerceIn(0f, 1f)
+                        val right = cx.normRight.coerceIn(left, 1f)
+                        val bottom = cx.normBottom.coerceIn(top, 1f)
+                        val detObj = JSONObject().apply {
+                            put("classe", cx.estado.rotulo)
+                            put("confianca", cx.confianca.coerceIn(0f, 1f).toDouble())
+                            put("x", left.toDouble())
+                            put("y", top.toDouble())
+                            put("largura", (right - left).coerceIn(0f, 1f).toDouble())
+                            put("altura", (bottom - top).coerceIn(0f, 1f).toDouble())
+                        }
+                        deteccoesArray.put(detObj)
+                    }
+                }
+                put("deteccoes", deteccoesArray)
+            }
+            leiturasArray.put(itemObj)
+        }
+
+        return JSONObject().apply {
+            put("codigoEnsaio", codigoEnsaio.trim().uppercase())
+            put("leituras", leiturasArray)
+        }
+    }
+
+    /**
      * Executa a sincronização completa:
      * 1. Envia lote de leituras com caixas YOLO e scores reais (POST /api/v1/coletas/sync-json)
      * 2. Recebe os IDs criados/existentes no banco
@@ -100,52 +166,7 @@ object CacauSyncClient {
         onProgresso("Preparando ${registros.size} coleta(s)...")
 
         // 1. Monta o payload JSON (SyncJsonRequest)
-        val leiturasArray = JSONArray()
-        for (reg in registros) {
-            val itemObj = JSONObject().apply {
-                put("campanha", reg.ensaioManual.ifBlank { codigoEnsaio })
-                put("plantId", reg.plantId)
-                // Extrai clone do ID ou da parcela
-                val partes = reg.plantId.split("_")
-                val cloneCode = if (partes.isNotEmpty()) partes[0] else "CCN-51"
-                put("clone", cloneCode)
-                put("parcela", reg.parcelaManual.ifBlank { "1" })
-                put("planta", if (reg.numPlanta > 0) reg.numPlanta else 1)
-                put("resultado", if (reg.diagnostico.equals("Não Coletável", ignoreCase = true)) "Não Coletável" else reg.totalFrutos.toString())
-                put("data", reg.data)
-                put("lat", reg.lat)
-                put("lng", reg.lng)
-                put("sadios", reg.sadios)
-                put("vassoura", reg.vassoura)
-                put("podridao", reg.podridao)
-                put("naoAvaliavel", reg.naoAvaliavel)
-
-                // Caixas auditadas do YOLO com confiança real e clamping [0.0, 1.0]
-                val deteccoesArray = JSONArray()
-                for (cx in reg.caixas) {
-                    val left = cx.normLeft.coerceIn(0f, 1f)
-                    val top = cx.normTop.coerceIn(0f, 1f)
-                    val right = cx.normRight.coerceIn(left, 1f)
-                    val bottom = cx.normBottom.coerceIn(top, 1f)
-                    val detObj = JSONObject().apply {
-                        put("classe", cx.estado.rotulo)
-                        put("confianca", cx.confianca.coerceIn(0f, 1f).toDouble())
-                        put("x", left.toDouble())
-                        put("y", top.toDouble())
-                        put("largura", (right - left).coerceIn(0f, 1f).toDouble())
-                        put("altura", (bottom - top).coerceIn(0f, 1f).toDouble())
-                    }
-                    deteccoesArray.put(detObj)
-                }
-                put("deteccoes", deteccoesArray)
-            }
-            leiturasArray.put(itemObj)
-        }
-
-        val requestRoot = JSONObject().apply {
-            put("codigoEnsaio", codigoEnsaio.trim().uppercase())
-            put("leituras", leiturasArray)
-        }
+        val requestRoot = criarPayloadSyncJson(codigoEnsaio, registros)
 
         onProgresso("Enviando dados para o servidor...")
         val syncRequest = Request.Builder()
@@ -209,8 +230,8 @@ object CacauSyncClient {
 
             onProgresso("Enviando fotos (${idx + 1}/${registros.size})...")
 
-            val isNaoColetavel = reg.diagnostico.equals("Não Coletável", ignoreCase = true)
-            val fotoBytes = if (isNaoColetavel || reg.uri == Uri.EMPTY) null else prepararFotoBytes(context, reg.uri)
+            val isPlantaNaoColetavel = isNaoColetavel(reg.diagnostico)
+            val fotoBytes = if (isPlantaNaoColetavel || reg.uri == Uri.EMPTY) null else prepararFotoBytes(context, reg.uri)
             if (fotoBytes != null && fotoBytes.isNotEmpty()) {
                 val sucessoFoto = uploadFoto(baseUrl, token, leituraId, reg.plantId, fotoBytes)
                 if (sucessoFoto) {

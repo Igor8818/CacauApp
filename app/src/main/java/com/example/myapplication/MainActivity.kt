@@ -1282,13 +1282,22 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
  * (bem comum em texto digitado por usuário) desalinha todas as colunas dali
  * pra frente na planilha exportada.
  */
-private fun csvField(value: Any?): String {
+internal fun csvField(value: Any?): String {
     val text = value?.toString() ?: ""
     return if (text.contains(",") || text.contains("\"") || text.contains("\n") || text.contains("\r")) {
         "\"" + text.replace("\"", "\"\"") + "\""
     } else {
         text
     }
+}
+
+internal fun formatarLinhaCsvPersonalizado(reg: RegistroCacau, itemPrincipal: String = reg.plantId.split("_").firstOrNull() ?: ""): String {
+    val detJson = PersistenciaLocalRegistros.serializarCaixasParaCsv(reg.caixas)
+    return listOf(
+        reg.ensaioManual, reg.plantId, itemPrincipal, reg.parcelaManual,
+        reg.numPlanta, reg.diagnostico, reg.data, reg.lat, reg.lng,
+        reg.totalFrutos, reg.sadios, reg.vassoura, reg.podridao, reg.naoAvaliavel, detJson
+    ).joinToString(",") { csvField(it) }
 }
 
 fun exportarCSVCEPEC_Personalizado(context: Context, registros: List<RegistroCacau>, l1: String, l2: String, l3: String) {
@@ -1311,12 +1320,7 @@ fun exportarCSVCEPEC_Personalizado(context: Context, registros: List<RegistroCac
                     writer.write(header); writer.newLine()
                     registros.forEach { reg ->
                         val itemPrincipal = reg.plantId.split("_").firstOrNull() ?: ""
-                        val detJson = PersistenciaLocalRegistros.serializarCaixasParaCsv(reg.caixas)
-                        val linha = listOf(
-                            reg.ensaioManual, reg.plantId, itemPrincipal, reg.parcelaManual,
-                            reg.numPlanta, reg.diagnostico, reg.data, reg.lat, reg.lng,
-                            reg.totalFrutos, reg.sadios, reg.vassoura, reg.podridao, reg.naoAvaliavel, detJson
-                        ).joinToString(",") { csvField(it) }
+                        val linha = formatarLinhaCsvPersonalizado(reg, itemPrincipal)
                         writer.write(linha); writer.newLine()
                     }
                     writer.flush()
