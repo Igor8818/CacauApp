@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logo_cacauapp.jpg" alt="CacauApp Banner" width="100%" />
+</div>
+
 # 📱 CacauApp — Visão Computacional Embarcada & Auditoria Fenotípica Offline
 
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org)
@@ -11,6 +15,25 @@ Aplicativo Android nativo de **Edge AI** (inteligência artificial on-device) de
 O sistema opera **100% offline** em quadras experimentais de melhoramento genético, realizando a detecção, classificação fitossanitária e contagem de frutos de cacau diretamente pela câmera do smartphone com auxílio de modelos de deep learning (**YOLOv8**).
 
 > 🔗 **Ecossistema Completo:** Este aplicativo se integra diretamente com a [**CacauSync API**](https://github.com/Igor8818/CacauSync), back-end em **Java 21 + Spring Boot 3 + PostgreSQL**, para ingestão em lote de coletas de campo, upload de fotos auditadas e ranqueamento de produtividade clonal.
+
+---
+
+## 📸 Interface e Telas em Campo
+
+<div align="center">
+  <table border="0">
+    <tr>
+      <td align="center" width="50%">
+        <b>Detecção Fitossanitária com IA & Revisão Interativa</b><br/><br/>
+        <img src="docs/assets/cacauapp_deteccao_perfeita.jpg" width="380" alt="Detecção Fitossanitária com YOLOv8" />
+      </td>
+      <td align="center" width="50%">
+        <b>Operação de Coleta em Campo & Modo Rota</b><br/><br/>
+        <img src="docs/assets/cacauapp_coleta_campo.png" width="380" alt="Operação de Coleta e Modo Rota" />
+      </td>
+    </tr>
+  </table>
+</div>
 
 ---
 
@@ -60,7 +83,7 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 | **Câmera & Visão Computacional** | CameraX 1.5.3, TensorFlow Lite 2.16.1, YOLOv8 (640x640 Float32) |
 | **Comunicação de Rede** | OkHttp 4.12.0, JSON nativo Android, Network Security Config |
 | **Geolocalização & Hardware** | Google Play Services Location (FusedLocationProviderClient), ExifInterface |
-| **Arquitetura** | MVVM, StateFlow, Coroutines assíncronas, SnapshotStateList |
+| **Arquitetura** | MVVM, StateFlow, Coroutines assíncronas, SnapshotStateList, Concorrência Blindada |
 
 ---
 
@@ -92,7 +115,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## 👨‍💻 Autor
 
 **Igor Hagge**  
-Desenvolvedor de Software | Android (Kotlin) & Soluções com Inteligência Artificial  
+Engenheiro de Software | Android (Kotlin) & Back-end Java & AI Engineering  
 * **GitHub:** [@Igor8818](https://github.com/Igor8818)  
 * **LinkedIn:** [linkedin.com/in/igorhagge](https://www.linkedin.com/in/igorhagge/)  
 * **E-mail:** [igor.senna2@hotmail.com](mailto:igor.senna2@hotmail.com)
