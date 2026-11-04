@@ -120,8 +120,8 @@ fun AppCacauCEPEC() {
             ModelConfig(
                 modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull(),
                 labelsFiltro = MODELOS_EMBUTIDOS.firstOrNull()?.labelsDefault ?: listOf("cacau"),
-                threshold = 0.5f,
-                maxResultados = 10
+                threshold = 0.30f,
+                maxResultados = 25
             )
         )
     }
@@ -384,7 +384,14 @@ fun TelaPrincipalCapturaOtimizada(
     var bitmapWidthCapturado by remember { mutableFloatStateOf(1f) }
     var bitmapHeightCapturado by remember { mutableFloatStateOf(1f) }
 
-    val imageCapture = remember { ImageCapture.Builder().build() }
+    var ultimoResultadoValido by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
+    var ultimoTimestampValidoMs by remember { mutableLongStateOf(0L) }
+
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+            .build()
+    }
 
     // Recria o detector quando a config de modelo mudar
     val detectorHelper = remember(modelConfig) {
@@ -419,6 +426,7 @@ fun TelaPrincipalCapturaOtimizada(
             deteccoesIniciais = caixasCapturadas,
             bitmapWidthRef = bitmapWidthCapturado,
             bitmapHeightRef = bitmapHeightCapturado,
+            detectorHelper = detectorHelper,
             onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                 onSave(fotoParaRevisao!!, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                 fotoParaRevisao = null
@@ -510,11 +518,27 @@ fun TelaPrincipalCapturaOtimizada(
         }
     } else {
         Box(Modifier.fillMaxSize()) {
-            CameraWithAI(detectorHelper, imageCapture) { resultadoDeteccaoAtual = it }
+            CameraWithAI(detectorHelper, imageCapture) { res ->
+                resultadoDeteccaoAtual = res
+                if (res.deteccoes.isNotEmpty()) {
+                    ultimoResultadoValido = res
+                    ultimoTimestampValidoMs = System.currentTimeMillis()
+                }
+            }
 
-            val deteccoesAtuais = resultadoDeteccaoAtual?.deteccoes ?: emptyList()
-            val frameWidth = resultadoDeteccaoAtual?.larguraImagem ?: 1f
-            val frameHeight = resultadoDeteccaoAtual?.alturaImagem ?: 1f
+            // Anti-flicker: se o frame atual oscilou para vazio por tremor/movimento nos últimos 650ms,
+            // mantém as caixas válidas recentes para visualização fluida e captura sem perda.
+            val resultadoAtivo = if ((resultadoDeteccaoAtual?.deteccoes?.size ?: 0) > 0) {
+                resultadoDeteccaoAtual
+            } else if (System.currentTimeMillis() - ultimoTimestampValidoMs < 650L) {
+                ultimoResultadoValido
+            } else {
+                resultadoDeteccaoAtual
+            }
+
+            val deteccoesAtuais = resultadoAtivo?.deteccoes ?: emptyList()
+            val frameWidth = resultadoAtivo?.larguraImagem ?: 1f
+            val frameHeight = resultadoAtivo?.alturaImagem ?: 1f
 
             // Filtra usando os labels da config (vazio = aceita tudo)
             val listaFiltrada = deteccoesAtuais.filter { det ->
@@ -534,13 +558,36 @@ fun TelaPrincipalCapturaOtimizada(
                 modifier = Modifier.fillMaxSize()
             )
 
-            Surface(Modifier.align(Alignment.TopCenter).padding(16.dp), color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(16.dp)) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Detectados: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(modelConfig.nomeExibicao, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+            // Topo compacto elevado para a barra de status
+            Surface(
+                Modifier
+                    .statusBarsPadding()
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Detectados: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("• ${modelConfig.nomeExibicao}", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
 
+            IconButton(
+                onClick = { cameraAtiva = false },
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .align(Alignment.TopEnd)
+                    .padding(end = 12.dp, top = 6.dp)
+            ) {
+                Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(30.dp))
+            }
+
+            // Botão de captura rebaixado
             ExtendedFloatingActionButton(
                 onClick = {
                     val pEx = if (isNum2) parcelaNum.toString() else parcelaTxt
@@ -560,15 +607,14 @@ fun TelaPrincipalCapturaOtimizada(
                         fotoParaRevisao = uri
                     }
                 },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp),
+                modifier = Modifier
+                    .navigationBarsPadding()
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
                 containerColor = Color(0xFF2E7D32),
-                text = { Text("CAPTURAR ($contagemFrutos DETECTADOS)") },
+                text = { Text("CAPTURAR ($contagemFrutos DETECTADOS)", fontWeight = FontWeight.Bold) },
                 icon = { Icon(Icons.Default.PhotoCamera, null) }
             )
-
-            IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
-                Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(32.dp))
-            }
         }
     }
 
@@ -630,7 +676,15 @@ fun TelaModoFieldBook(
     var caixasCapturadas by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var bitmapWidthCapturado by remember { mutableFloatStateOf(1f) }
     var bitmapHeightCapturado by remember { mutableFloatStateOf(1f) }
-    val imageCapture = remember { ImageCapture.Builder().build() }
+
+    var ultimoResultadoValido by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
+    var ultimoTimestampValidoMs by remember { mutableLongStateOf(0L) }
+
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+            .build()
+    }
 
     val detectorHelper = remember(modelConfig) {
         val source = when {
@@ -676,6 +730,7 @@ fun TelaModoFieldBook(
                 deteccoesIniciais = caixasCapturadas,
                 bitmapWidthRef = bitmapWidthCapturado,
                 bitmapHeightRef = bitmapHeightCapturado,
+                detectorHelper = detectorHelper,
                 onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                     onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                     pontoAtual.coletado = true
@@ -743,11 +798,25 @@ fun TelaModoFieldBook(
             }
         } else {
             Box(Modifier.fillMaxSize()) {
-                CameraWithAI(detectorHelper, imageCapture) { resultadoDeteccaoAtual = it }
+                CameraWithAI(detectorHelper, imageCapture) { res ->
+                    resultadoDeteccaoAtual = res
+                    if (res.deteccoes.isNotEmpty()) {
+                        ultimoResultadoValido = res
+                        ultimoTimestampValidoMs = System.currentTimeMillis()
+                    }
+                }
 
-                val deteccoesAtuais = resultadoDeteccaoAtual?.deteccoes ?: emptyList()
-                val frameWidth = resultadoDeteccaoAtual?.larguraImagem ?: 1f
-                val frameHeight = resultadoDeteccaoAtual?.alturaImagem ?: 1f
+                val resultadoAtivo = if ((resultadoDeteccaoAtual?.deteccoes?.size ?: 0) > 0) {
+                    resultadoDeteccaoAtual
+                } else if (System.currentTimeMillis() - ultimoTimestampValidoMs < 650L) {
+                    ultimoResultadoValido
+                } else {
+                    resultadoDeteccaoAtual
+                }
+
+                val deteccoesAtuais = resultadoAtivo?.deteccoes ?: emptyList()
+                val frameWidth = resultadoAtivo?.larguraImagem ?: 1f
+                val frameHeight = resultadoAtivo?.alturaImagem ?: 1f
 
                 val listaFiltrada = deteccoesAtuais.filter { det ->
                     val label = det.categories.firstOrNull()?.label?.lowercase() ?: ""
@@ -766,10 +835,36 @@ fun TelaModoFieldBook(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                Surface(Modifier.statusBarsPadding().align(Alignment.TopCenter).padding(16.dp), color = Color.Black.copy(alpha = 0.7f), shape = RoundedCornerShape(16.dp)) {
-                    Text("${pontoAtual.clone} | Contagem: $contagemFrutos", color = Color.White, modifier = Modifier.padding(8.dp))
+                // Topo compacto elevado para a barra de status
+                Surface(
+                    Modifier
+                        .statusBarsPadding()
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = Color.Black.copy(alpha = 0.75f),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("${pontoAtual.clone} | Pl ${pontoAtual.planta}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("• Detectados: $contagemFrutos", color = Color(0xFF00E676), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
                 }
 
+                IconButton(
+                    onClick = { cameraAtiva = false },
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .align(Alignment.TopEnd)
+                        .padding(end = 12.dp, top = 6.dp)
+                ) {
+                    Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                }
+
+                // Botão de captura rebaixado
                 ExtendedFloatingActionButton(
                     onClick = {
                         val idParaArquivo = "${pontoAtual.clone}_P${pontoAtual.parcela}_Pl${pontoAtual.planta}"
@@ -786,15 +881,14 @@ fun TelaModoFieldBook(
                             fotoParaRevisao = uri
                         }
                     },
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp),
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp),
                     containerColor = Color(0xFF2E7D32),
-                    text = { Text("CAPTURAR PLANTA ${pontoAtual.planta}") },
+                    text = { Text("CAPTURAR PLANTA ${pontoAtual.planta} ($contagemFrutos)", fontWeight = FontWeight.Bold) },
                     icon = { Icon(Icons.Default.PhotoCamera, null) }
                 )
-
-                IconButton(onClick = { cameraAtiva = false }, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
-                    Icon(Icons.Default.Cancel, null, tint = Color.White, modifier = Modifier.size(32.dp))
-                }
             }
         }
     }

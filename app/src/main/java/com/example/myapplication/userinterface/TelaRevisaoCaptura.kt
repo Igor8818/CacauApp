@@ -1,7 +1,9 @@
 package com.example.myapplication.userinterface
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import androidx.compose.foundation.Canvas
@@ -18,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -26,10 +29,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.myapplication.userinterface.util.ObjectDetectorHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.tensorflow.lite.task.vision.detector.Detection
 
 /**
@@ -55,7 +60,7 @@ data class CaixaAuditavel(
     val normTop: Float,
     val normRight: Float,
     val normBottom: Float,
-    var estado: EstadoFruto = EstadoFruto.SADIO,
+    val estado: EstadoFruto = EstadoFruto.SADIO,
     val manual: Boolean = false,
     val confianca: Float = 0.90f
 )
@@ -63,10 +68,13 @@ data class CaixaAuditavel(
 /**
  * Tela de Revisão Pós-Captura / Pós-Processamento:
  * - Exibe a foto capturada com as caixas de detecção da IA sobrepostas;
+ * - Executa inferência em background sobre a foto estática para garantir detecções em qualquer condição de tremor da mão;
+ * - Topo compacto e elevado para a barra de status (libera visão superior da árvore);
+ * - Base compacta e rebaixada para a barra de navegação (libera visão inferior);
+ * - Painel de classificação ancorado logo acima dos botões inferiores (nunca no meio da tela cobrindo os frutos);
  * - O usuário pode TOCAR em qualquer quadrado verde para classificá-lo (Sadio, Vassoura, Podridão, Não Avaliável);
  * - O usuário pode TOCAR em frutos não detectados para adicionar caixas manualmente;
- * - Botão de lixeira para excluir falsos positivos;
- * - Resumo consolidado para exportação na planilha CSV e envio futuro ao backend Spring (CacauSync).
+ * - Resumo consolidado para exportação na planilha CSV e envio ao backend CacauSync.
  */
 @Composable
 fun TelaRevisaoCaptura(
@@ -75,6 +83,7 @@ fun TelaRevisaoCaptura(
     deteccoesIniciais: List<Detection>,
     bitmapWidthRef: Float,
     bitmapHeightRef: Float,
+    detectorHelper: ObjectDetectorHelper? = null,
     onConfirmar: (
         diagnostico: String,
         total: Int,
@@ -113,6 +122,7 @@ fun TelaRevisaoCaptura(
 
     var indiceSelecionado by remember { mutableIntStateOf(-1) }
     var plantaNaoColetavel by remember { mutableStateOf(false) }
+    val caixasExcluidasManualmente = remember(fotoUri) { mutableListOf<CaixaAuditavel>() }
 
     // Proporção real da imagem considerando rotação EXIF
     val imgAspect = remember(fotoUri) {
@@ -131,6 +141,49 @@ fun TelaRevisaoCaptura(
             if (w > 0 && h > 0) w.toFloat() / h.toFloat() else (3f / 4f)
         } catch (e: Exception) {
             3f / 4f
+        }
+    }
+
+    // Re-inferência em background na foto estática capturada:
+    // Garante que mesmo se a mão do pesquisador tremeu ao clicar em CAPTURAR, os frutos na foto são detectados.
+    LaunchedEffect(fotoUri) {
+        val helper = detectorHelper ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            val bmp = carregarBitmapFoto(context, fotoUri, maxDim = 1280) ?: return@withContext
+            try {
+                val res = helper.detectarSincrono(bmp) ?: return@withContext
+                val bmpW = bmp.width.toFloat()
+                val bmpH = bmp.height.toFloat()
+
+                withContext(Dispatchers.Main) {
+                    res.deteccoes.forEach { det ->
+                        val r = det.boundingBox
+                        val nL = (r.left / bmpW).coerceIn(0f, 1f)
+                        val nT = (r.top / bmpH).coerceIn(0f, 1f)
+                        val nR = (r.right / bmpW).coerceIn(0f, 1f)
+                        val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
+
+                        val jaExiste = caixas.any { c -> iouNorm(c, nL, nT, nR, nB) > 0.35f }
+                        val foiExcluida = caixasExcluidasManualmente.any { c -> iouNorm(c, nL, nT, nR, nB) > 0.35f }
+
+                        if (!jaExiste && !foiExcluida) {
+                            caixas.add(
+                                CaixaAuditavel(
+                                    normLeft = nL,
+                                    normTop = nT,
+                                    normRight = nR,
+                                    normBottom = nB,
+                                    estado = EstadoFruto.SADIO,
+                                    manual = false,
+                                    confianca = det.categories.firstOrNull()?.score ?: 0.85f
+                                )
+                            )
+                        }
+                    }
+                }
+            } finally {
+                bmp.recycle()
+            }
         }
     }
 
@@ -283,105 +336,110 @@ fun TelaRevisaoCaptura(
             }
         }
 
-        // Cabeçalho superior: ID e Contagem Rápida
+        // Cabeçalho superior compacto e elevado para a barra de status (libera visão superior)
         Surface(
             modifier = Modifier
+                .statusBarsPadding()
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(16.dp),
-            color = Color.Black.copy(alpha = 0.75f),
-            shape = RoundedCornerShape(16.dp)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            color = Color.Black.copy(alpha = 0.78f),
+            shape = RoundedCornerShape(14.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(plantId, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Toque em um quadrado para classificar", color = Color.LightGray, fontSize = 12.sp)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(plantId, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Toque no fruto p/ classificar ou no fundo p/ +", color = Color(0xFFB0BEC5), fontSize = 10.sp)
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF2E7D32)
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (plantaNaoColetavel) Color(0xFFC62828) else Color(0xFF2E7D32)
                 ) {
                     Text(
                         if (plantaNaoColetavel) "NÃO COLETÁVEL" else "$totalFrutos Frutos",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
         }
 
-        // Painel Flutuante quando uma caixa de fruto está selecionada
+        // Painel Flutuante quando uma caixa de fruto está selecionada (acoplado acima da barra inferior)
         if (indiceSelecionado in caixas.indices && !plantaNaoColetavel) {
             val caixaAtual = caixas[indiceSelecionado]
             Card(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF212121).copy(alpha = 0.95f)),
-                shape = RoundedCornerShape(18.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 98.dp, start = 8.dp, end = 8.dp)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.98f)),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF424242))
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Classificar Fruto #${indiceSelecionado + 1}",
+                            "Fruto #${indiceSelecionado + 1} • Selecione a classificação:",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            fontSize = 13.sp
                         )
-                        IconButton(onClick = { indiceSelecionado = -1 }) {
-                            Icon(Icons.Default.Close, null, tint = Color.LightGray)
+                        IconButton(
+                            onClick = { indiceSelecionado = -1 },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
                         }
                     }
 
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
 
                     // Botões de Classificação do Fruto
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         // Sadio
                         Button(
                             onClick = {
-                                caixaAtual.estado = EstadoFruto.SADIO
+                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.SADIO)
                                 indiceSelecionado = -1
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.SADIO) Color(0xFF00E676) else Color(0xFF333333)
+                                containerColor = if (caixaAtual.estado == EstadoFruto.SADIO) Color(0xFF00E676) else Color(0xFF2C2C2C)
                             ),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Sadio", fontSize = 12.sp, color = if (caixaAtual.estado == EstadoFruto.SADIO) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+                            Text("Sadio", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.SADIO) Color.Black else Color.White, fontWeight = FontWeight.Bold)
                         }
 
                         // Vassoura
                         Button(
                             onClick = {
-                                caixaAtual.estado = EstadoFruto.VASSOURA
+                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.VASSOURA)
                                 indiceSelecionado = -1
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color(0xFFFF9100) else Color(0xFF333333)
+                                containerColor = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color(0xFFFF9100) else Color(0xFF2C2C2C)
                             ),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Vassoura", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color.Black else Color.White, fontWeight = FontWeight.Bold)
                         }
@@ -389,79 +447,81 @@ fun TelaRevisaoCaptura(
                         // Podridão
                         Button(
                             onClick = {
-                                caixaAtual.estado = EstadoFruto.PODRIDAO
+                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.PODRIDAO)
                                 indiceSelecionado = -1
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.PODRIDAO) Color(0xFFFF1744) else Color(0xFF333333)
+                                containerColor = if (caixaAtual.estado == EstadoFruto.PODRIDAO) Color(0xFFFF1744) else Color(0xFF2C2C2C)
                             ),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
                             Text("Podridão", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                         }
-                    }
 
-                    Spacer(Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
                         // Não Avaliável
-                        OutlinedButton(
+                        Button(
                             onClick = {
-                                caixaAtual.estado = EstadoFruto.NAO_AVALIAVEL
+                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.NAO_AVALIAVEL)
                                 indiceSelecionado = -1
                             },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB0BEC5))
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (caixaAtual.estado == EstadoFruto.NAO_AVALIAVEL) Color(0xFF90A4AE) else Color(0xFF2C2C2C)
+                            ),
+                            modifier = Modifier.weight(1f).height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Não Avaliável", fontSize = 11.sp)
+                            Text("N. Aval.", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
                         // Excluir caixa
-                        OutlinedButton(
+                        IconButton(
                             onClick = {
+                                caixasExcluidasManualmente.add(caixaAtual)
                                 caixas.removeAt(indiceSelecionado)
                                 indiceSelecionado = -1
                             },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(Color(0xFFB71C1C).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
                         ) {
-                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Excluir", fontSize = 11.sp)
+                            Icon(Icons.Default.Delete, null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
                         }
                     }
                 }
             }
         }
 
-        // Painel Inferior: Resumo das Classes e Ações
+        // Painel Inferior: Resumo das Classes e Ações compactado e rebaixado
         Surface(
             modifier = Modifier
+                .navigationBarsPadding()
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
-            color = Color(0xFF1E1E1E).copy(alpha = 0.95f),
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            color = Color(0xFF181818).copy(alpha = 0.96f),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333333))
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Barra de Badges de Totais por Categoria
+                // Barra de Chips de Totais por Categoria
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    BadgeCategoria(rotulo = "Sadios", total = qtdSadios, cor = Color(0xFF00E676))
-                    BadgeCategoria(rotulo = "Vassoura", total = qtdVassoura, cor = Color(0xFFFF9100))
-                    BadgeCategoria(rotulo = "Podridão", total = qtdPodridao, cor = Color(0xFFFF1744))
-                    BadgeCategoria(rotulo = "Não Aval.", total = qtdNaoAvaliavel, cor = Color(0xFF90A4AE))
+                    ChipResumo(rotulo = "Sadios", total = qtdSadios, cor = Color(0xFF00E676))
+                    ChipResumo(rotulo = "Vassoura", total = qtdVassoura, cor = Color(0xFFFF9100))
+                    ChipResumo(rotulo = "Podridão", total = qtdPodridao, cor = Color(0xFFFF1744))
+                    ChipResumo(rotulo = "N.Aval", total = qtdNaoAvaliavel, cor = Color(0xFF90A4AE))
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(4.dp))
 
                 // Toggle para marcar planta inteira como Não Coletável
                 Row(
@@ -472,30 +532,32 @@ fun TelaRevisaoCaptura(
                     Checkbox(
                         checked = plantaNaoColetavel,
                         onCheckedChange = { plantaNaoColetavel = it },
-                        colors = CheckboxDefaults.colors(checkedColor = Color.Red)
+                        colors = CheckboxDefaults.colors(checkedColor = Color.Red),
+                        modifier = Modifier.scale(0.85f)
                     )
-                    Text("Marcar Planta como Não Coletável / Ausente", color = Color.White, fontSize = 13.sp)
+                    Text("Marcar Planta como Não Coletável / Ausente", color = Color.White, fontSize = 11.sp)
                 }
 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(4.dp))
 
                 // Botões de Ação
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Refazer Foto
                     OutlinedButton(
                         onClick = onRefazer,
                         modifier = Modifier
                             .weight(1f)
-                            .height(52.dp),
+                            .height(40.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Default.Refresh, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("REFAZER")
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("REFAZER", fontSize = 12.sp)
                     }
 
                     // Confirmar e Salvar
@@ -518,14 +580,15 @@ fun TelaRevisaoCaptura(
                             }
                         },
                         modifier = Modifier
-                            .weight(1.4f)
-                            .height(52.dp),
+                            .weight(1.3f)
+                            .height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Default.CheckCircle, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("CONFIRMAR COLETA", fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (plantaNaoColetavel) "CONFIRMAR AUSENTE" else "SALVAR ($totalFrutos)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -534,18 +597,95 @@ fun TelaRevisaoCaptura(
 }
 
 @Composable
-private fun BadgeCategoria(rotulo: String, total: Int, cor: Color) {
+private fun ChipResumo(rotulo: String, total: Int, cor: Color) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = cor.copy(alpha = 0.18f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, cor.copy(alpha = 0.5f))
+        shape = RoundedCornerShape(8.dp),
+        color = cor.copy(alpha = 0.16f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, cor.copy(alpha = 0.45f))
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("$total", color = cor, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
-            Text(rotulo, color = Color.White, fontSize = 10.sp)
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(cor, CircleShape)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "$total $rotulo",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp
+            )
         }
+    }
+}
+
+private fun iouNorm(c: CaixaAuditavel, l: Float, t: Float, r: Float, b: Float): Float {
+    val interL = maxOf(c.normLeft, l)
+    val interT = maxOf(c.normTop, t)
+    val interR = minOf(c.normRight, r)
+    val interB = minOf(c.normBottom, b)
+    val w = maxOf(0f, interR - interL)
+    val h = maxOf(0f, interB - interT)
+    val inter = w * h
+    val area1 = (c.normRight - c.normLeft) * (c.normBottom - c.normTop)
+    val area2 = (r - l) * (b - t)
+    val union = area1 + area2 - inter
+    return if (union <= 0f) 0f else inter / union
+}
+
+private fun carregarBitmapFoto(context: Context, uri: Uri, maxDim: Int = 1280): Bitmap? {
+    return try {
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, boundsOptions)
+        }
+        val origW = boundsOptions.outWidth
+        val origH = boundsOptions.outHeight
+        if (origW <= 0 || origH <= 0) return null
+
+        var sampleSize = 1
+        var w = origW
+        var h = origH
+        while (w > maxDim || h > maxDim) {
+            sampleSize *= 2
+            w /= 2
+            h /= 2
+        }
+
+        val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val rawBmp = context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOptions)
+        } ?: return null
+
+        val orientation = try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+        }
+
+        if (matrix.isIdentity) {
+            rawBmp
+        } else {
+            val rotated = Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, matrix, true)
+            if (rotated != rawBmp) rawBmp.recycle()
+            rotated
+        }
+    } catch (_: Exception) {
+        null
     }
 }

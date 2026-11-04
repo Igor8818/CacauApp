@@ -32,3 +32,16 @@ Dado um `Bitmap` de entrada com dimensões `(imgW, imgH)` e um tensor de entrada
 
 3. **Gerenciamento de Memória (Reuso de Buffers):**
    - Reutilizar `Bitmap` do canvas Letterbox (`640x640`), `IntArray` de pixels e `ByteBuffer` direto quando `inputWidth` e `inputHeight` permanecerem constantes, zerando alocações por frame no Garbage Collector.
+
+## 3. Estabilidade de Detecção & Pós-Captura (Auditoria de Frutos)
+1. **Verificação Multi-Âncora de Escala (`coordsArePixels`):**
+   - O modelo `detector.tflite` (YOLOv11s, entrada `1x640x640x3` Float32, saída `1x5x8400` Float32) aplica multiplicação por strides `[8, 16, 32]` no final do grafo.
+   - Para evitar falso negativo na âncora `0` (localizada na borda de padding `4px`), a verificação `coordsArePixels` deve inspecionar o máximo entre âncoras espaçadas (`0`, `yoloNumAnchors / 2`, `yoloNumAnchors - 1`).
+2. **Limiar de Campo e Persistência Temporal (Anti-Flicker):**
+   - Limiar padrão (`threshold`) ajustado para `0.30f` (30%) para frutos sombreados sob copa de cacau (cabruca).
+   - No preview ao vivo, manter as últimas detecções válidas por até `650ms` caso um frame intermediário oscile para vazio por movimento ao tocar no botão de captura.
+   - Na `TelaRevisaoCaptura`, executar inferência síncrona em background (`detectarSincrono`) diretamente sobre o `Bitmap` da foto capturada (`fotoUri` com correção EXIF) e fundir (via IoU) com as caixas do snapshot ao vivo, garantindo que os quadrados verdes de classificação sempre apareçam.
+3. **Ergonomia de UI na Tela de Revisão (`TelaRevisaoCaptura`):**
+   - **Topo Compacto:** Barra superior de linha única no topo útil (`statusBarsPadding`), altura reduzida (~40dp).
+   - **Rodapé Compacto e Rebaixado:** Resumo de categorias e toggle "Não Coletável" condensados em chips compactos + botões de ação de `40.dp` colados à base (`navigationBarsPadding`), reduzindo a ocupação vertical em mais de 50%.
+   - **Seletor de Classificação Desobstruído:** Barra de classificação do fruto selecionado ancorada logo acima do rodapé (e não no centro da tela), mantendo os frutos centrais livres para visualização e toque.

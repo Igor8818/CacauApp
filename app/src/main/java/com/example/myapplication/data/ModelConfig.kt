@@ -19,8 +19,8 @@ data class ModelConfig(
 
     // Filtros de detecção
     val labelsFiltro: List<String> = listOf("cacau", "fruto"),
-    val threshold: Float = 0.55f,
-    val maxResultados: Int = 10
+    val threshold: Float = 0.30f,
+    val maxResultados: Int = 25
 ) {
     val nomeExibicao: String get() = when {
         modeloSelecionado != null -> modeloSelecionado.nomeExibicao

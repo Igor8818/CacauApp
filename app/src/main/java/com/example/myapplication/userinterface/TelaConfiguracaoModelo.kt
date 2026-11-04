@@ -259,7 +259,7 @@ fun TelaConfiguracaoModelo(
 
                         // Threshold
                         Column {
-                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 55
+                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 30
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                                 Text("Confiança mínima: $thresholdVal%", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                                 if (thresholdVal > 60) {
@@ -325,7 +325,7 @@ fun TelaConfiguracaoModelo(
                 val podeSalvar = modeloSelecionado != null || modeloExternoUri != null
                 Button(
                     onClick = {
-                        val threshold = (thresholdTexto.toIntOrNull() ?: 50) / 100f
+                        val threshold = (thresholdTexto.toIntOrNull() ?: 30) / 100f
                         onSalvar(
                             ModelConfig(
                                 modeloSelecionado = modeloSelecionado,
