@@ -1,15 +1,23 @@
-# Diretrizes de Engenharia e Orquestração de Agentes (SDD 2.0)
+# Diretrizes de Negócio, Engenharia e Orquestração de Subagentes
 
-Este repositório utiliza **Spec-Driven Development 2.0 (SDD)** combinado com o padrão **Elefante & Peixinho Dourado** e isolamento de subagentes nativo do **Google Antigravity**.
+Este repositório contém o ecossistema **CacauApp** (Android/Edge AI) e **CacauSync** (Backend Spring Boot & Painel Web) do **CEPEC / CEPLAC**.
 
-## 1. Arquitetura do Ecossistema
-- **`app/` (CacauApp Mobile):** Aplicativo Android nativo em Kotlin + Jetpack Compose, CameraX e inferência Edge AI offline com TensorFlow Lite (YOLOv8).
-- **`CacauSync/` (CacauSync API):** Back-end corporativo em Java 21 + Spring Boot 3.3, PostgreSQL, Flyway, autenticação JWT e suíte JUnit 5 / Mockito.
-- **`docs/specs/` (Fonte Única da Verdade):** Especificações formais (`SPEC-XXX-*.md`) contendo contratos, invariantes e critérios de aceite.
+## 1. Documentos que Guiam os Agentes (Ordem de Prioridade)
+1. **[`docs/REGRAS_DE_NEGOCIO.md`](docs/REGRAS_DE_NEGOCIO.md) (FONTE PRIMÁRIA — Regras de Negócio Reais):**
+   Define **o que o produto deve fazer** no campo (`RN-MOB-01` a `RN-MOB-05`) e no laboratório (`RN-BACK-01` a `RN-BACK-05`): papel do YOLO em enxergar os frutos, revisão humana de doenças, desempenho fluido em vários aparelhos Android, modos de coleta, sobrevivência clonal, produtividade líquida baseada em frutos sadios e auditoria científica.
+2. **Contratos Técnicos (`docs/specs/`):**
+   Detalham como o código cumpre as regras de negócio sem quebrar a comunicação entre o app e o servidor:
+   - `SPEC-000-matriz-concordancia-ecossistema.md`: Contrato de integração Mobile ↔ API ↔ CSV ↔ Web.
+   - `SPEC-001-sincronizacao-cacausync.md`: Sincronização, idempotência, EXIF e memória no Android.
+   - `SPEC-002-yolo-letterbox-camera.md`: Pipeline do YOLO, Letterbox sem distorção e ergonomia da câmera.
+   - `SPEC-003-produtividade-e-analytics-cacausync.md`: Fórmulas de produtividade líquida (sadios, kg/ha, @/ha) e validação.
 
-## 2. Protocolo Elefante & Peixinho (Orquestração Multi-Agente)
-1. **Congelar a Spec:** Nenhuma funcionalidade complexa deve ser implementada sem antes criar ou atualizar seu contrato em `docs/specs/`.
-2. **O Elefante (Agente Construtor / Coordenador):** Implementa o código guiado pela especificação. Para tarefas paralelas entre Mobile (`app/`) e Backend (`CacauSync/`), pode despachar subagentes isolados com `Workspace: "share"` (Git Worktree nativo).
-3. **O Peixinho Dourado (Subagente Auditor de Contexto Zero):**
-   - Antes de dar uma entrega como finalizada, o Agente Construtor deve invocar um subagente com **contexto zerado** (sem acesso ao histórico do chat).
-   - O Peixinho lê **apenas** o arquivo `docs/specs/SPEC-XXX.md` e os arquivos de código modificados, buscando desvios de contrato, condições de corrida, vazamentos de memória ou casos de borda não cobertos.
+## 2. Como Executar Subagentes para Validar Tudo (Sem Viés)
+Para validar se o projeto cumpre tanto as **Regras de Negócio (`docs/REGRAS_DE_NEGOCIO.md`)** quanto a **Concordância Técnica (`docs/specs/`)**, invoque 3 subagentes `research` de contexto zero em paralelo:
+
+1. **Subagente 1 — Auditor de Negócio & Desempenho Mobile (`RN-MOB-01` a `RN-MOB-05`):**
+   - Verifica se o `CacauApp` (`ObjectDetectorHelper.kt`, `CameraUtils.kt`, `TelaRevisaoCaptura.kt`, `MainActivity.kt`, `PersistenciaLocalRegistros.kt`, `CacauSyncClient.kt`) enxerga os frutos via YOLO sem distorcer caixas, se permite classificar/adicionar/excluir frutos na revisão, se é leve em memória/threads para rodar bem em aparelhos Android variados (ex.: Galaxy A50 a Redmi Note 13) e se salva tudo offline com segurança.
+2. **Subagente 2 — Auditor de Negócio & Agronomia Backend/Web (`RN-BACK-01` a `RN-BACK-05`):**
+   - Verifica se o `CacauSync` (`EnsaioService.java`, `LeituraService.java`, `ColetaSyncService.java`, `LeituraColeta.java`, `index.html`) respeita a palavra final do pesquisador na auditoria, se não duplica plantas re-coletadas, se calcula a produtividade comercial apenas sobre **frutos sadios** (tratando vassoura/podridão como perda) e se a interface web reflete fielmente os dados.
+3. **Subagente 3 — Auditor de Concordância Mobile ↔ Backend (`SPEC-000`):**
+   - Verifica se tudo o que o app envia ou importa (JSON `sync-json`, upload de fotos EXIF, 3 formatos de CSV, rótulos de doenças e datas) casa 100% com o que o servidor espera receber e exportar.

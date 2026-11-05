@@ -7,6 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -43,6 +44,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.io.BufferedReader
 import java.io.BufferedWriter
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
@@ -110,9 +113,21 @@ fun AppCacauCEPEC() {
     var lngAtual by remember { mutableDoubleStateOf(0.0) }
 
     var mostrarDialogMapeamento by remember { mutableStateOf(false) }
+    var mostrarDialogoConfirmacaoNovoEnsaio by remember { mutableStateOf(false) }
     val colunasEncontradas = remember { mutableStateListOf<String>() }
     var uriArquivoPendente by remember { mutableStateOf<Uri?>(null) }
     var temDadosAnteriores by remember { mutableStateOf(false) }
+
+    fun reconciliarRotaComRegistros(rota: List<RotaColeta>, registros: List<RegistroCacau>) {
+        rota.forEach { ponto ->
+            val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
+            val reg = registros.firstOrNull { it.plantId == idCompleto }
+            if (reg != null) {
+                ponto.coletado = true
+                ponto.qtdFrutos = reg.diagnostico
+            }
+        }
+    }
 
     // ── CONFIGURAÇÃO DE MODELO (nova) ──
     var modelConfig by remember {
@@ -139,6 +154,7 @@ fun AppCacauCEPEC() {
 
                 if (idxClone != -1 && idxParcela != -1 && idxPlanta != -1) {
                     val lista = processarCSVComIndices(context, it, idxClone, idxParcela, idxPlanta)
+                    reconciliarRotaComRegistros(lista, listaRegistros)
                     rotaPreCarregada.clear()
                     rotaPreCarregada.addAll(lista)
                     Toast.makeText(context, "${lista.size} plantas carregadas automaticamente!", Toast.LENGTH_SHORT).show()
@@ -192,17 +208,51 @@ fun AppCacauCEPEC() {
         }
 
         !configConcluida -> {
+            if (mostrarDialogoConfirmacaoNovoEnsaio) {
+                AlertDialog(
+                    onDismissRequest = { mostrarDialogoConfirmacaoNovoEnsaio = false },
+                    title = { Text("Iniciar Novo Monitoramento?") },
+                    text = {
+                        Text("Existem ${listaRegistros.size} registros coletados salvos no aparelho que serão substituídos. Deseja realmente iniciar uma nova campanha e limpar os registros anteriores?")
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                listaRegistros.clear()
+                                valorNumVariavel2 = 1
+                                valorNumVariavel3 = 1
+                                temDadosAnteriores = true
+                                configConcluida = true
+                                mostrarDialogoConfirmacaoNovoEnsaio = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                        ) {
+                            Text("Sim, Iniciar Novo")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { mostrarDialogoConfirmacaoNovoEnsaio = false }) {
+                            Text("Cancelar")
+                        }
+                    }
+                )
+            }
+
             TelaCheckInSimples(
                 ensaio = ensaioNome,
                 onEnsaioChange = { ensaioNome = it },
                 exibirBotaoVoltar = temDadosAnteriores,
                 onVoltarClick = { configConcluida = true },
                 onContinuar = {
-                    listaRegistros.clear()
-                    valorNumVariavel2 = 1
-                    valorNumVariavel3 = 1
-                    temDadosAnteriores = true
-                    configConcluida = true
+                    if (listaRegistros.isNotEmpty()) {
+                        mostrarDialogoConfirmacaoNovoEnsaio = true
+                    } else {
+                        listaRegistros.clear()
+                        valorNumVariavel2 = 1
+                        valorNumVariavel3 = 1
+                        temDadosAnteriores = true
+                        configConcluida = true
+                    }
                 }
             )
         }
@@ -245,10 +295,11 @@ fun AppCacauCEPEC() {
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { valorTxtVariavel3 = it },
                             modelConfig = modelConfig,
                             onSave = { uri, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
-                                val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
+                                val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
                                 val idCompleto = "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}"
                                 if (valorVariavel1.isNotBlank() && !historicoValores1.contains(valorVariavel1)) historicoValores1.add(valorVariavel1)
                                 val plantIntVal = if (tipoNumVariavel3) valorNumVariavel3 else 1
+                                listaRegistros.removeAll { it.plantId == idCompleto }
                                 listaRegistros.add(
                                     RegistroCacau(
                                         uri = uri,
@@ -279,7 +330,7 @@ fun AppCacauCEPEC() {
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { rotaPreCarregada.clear() },
                             onSaveColetaRota = { uri, ponto, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
-                                val data = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date())
+                                val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
                                 val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
                                 listaRegistros.removeAll { it.plantId == idCompleto }
                                 listaRegistros.add(
@@ -337,6 +388,7 @@ fun AppCacauCEPEC() {
                         val idxParcela = colunasEncontradas.indexOf(selParcela)
                         val idxPlanta = colunasEncontradas.indexOf(selPlanta)
                         val lista = processarCSVComIndices(context, uriArquivoPendente!!, idxClone, idxParcela, idxPlanta)
+                        reconciliarRotaComRegistros(lista, listaRegistros)
                         rotaPreCarregada.clear()
                         rotaPreCarregada.addAll(lista)
                         mostrarDialogMapeamento = false
@@ -427,6 +479,7 @@ fun TelaPrincipalCapturaOtimizada(
             bitmapWidthRef = bitmapWidthCapturado,
             bitmapHeightRef = bitmapHeightCapturado,
             detectorHelper = detectorHelper,
+            labelsFiltro = modelConfig.labelsFiltro,
             onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                 onSave(fotoParaRevisao!!, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                 fotoParaRevisao = null
@@ -669,7 +722,11 @@ fun TelaModoFieldBook(
     onSaveColetaRota: (Uri, RotaColeta, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
-    var indiceAtual by rememberSaveable { mutableIntStateOf(0) }
+    val primeiroNaoColetado = remember(rotaCompleta) {
+        val idx = rotaCompleta.indexOfFirst { !it.coletado }
+        if (idx >= 0) idx else 0
+    }
+    var indiceAtual by rememberSaveable(rotaCompleta.size) { mutableIntStateOf(primeiroNaoColetado) }
     var cameraAtiva by remember { mutableStateOf(false) }
     var resultadoDeteccaoAtual by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
     var fotoParaRevisao by remember { mutableStateOf<Uri?>(null) }
@@ -731,6 +788,7 @@ fun TelaModoFieldBook(
                 bitmapWidthRef = bitmapWidthCapturado,
                 bitmapHeightRef = bitmapHeightCapturado,
                 detectorHelper = detectorHelper,
+                labelsFiltro = modelConfig.labelsFiltro,
                 onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                     onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                     pontoAtual.coletado = true
@@ -943,8 +1001,24 @@ fun limparSimbologiaPura(texto: String): String {
 
 fun fatiarColunasCampos(linha: String): List<String> {
     if (linha.isBlank()) return emptyList()
-    val divisor = if (linha.contains(";")) ";" else ","
-    return linha.replace("\r", "").replace("\n", "").split(divisor).map { it.replace("\"", "").trim() }
+    val divisor = if (linha.contains(";")) ';' else ','
+    val resultado = mutableListOf<String>()
+    val sb = StringBuilder()
+    var dentroAspas = false
+    val limpa = linha.replace("\r", "").replace("\n", "")
+    for (i in limpa.indices) {
+        val c = limpa[i]
+        if (c == '"') {
+            dentroAspas = !dentroAspas
+        } else if (c == divisor && !dentroAspas) {
+            resultado.add(sb.toString().trim())
+            sb.clear()
+        } else {
+            sb.append(c)
+        }
+    }
+    resultado.add(sb.toString().trim())
+    return resultado
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1303,32 +1377,41 @@ internal fun formatarLinhaCsvPersonalizado(reg: RegistroCacau, itemPrincipal: St
 fun exportarCSVCEPEC_Personalizado(context: Context, registros: List<RegistroCacau>, l1: String, l2: String, l3: String) {
     val timestamp = System.currentTimeMillis()
     val nomeFinal = "Coleta_Custom_${timestamp}.csv"
-    val contentUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.Downloads.EXTERNAL_CONTENT_URI else Uri.parse("content://media/external/file")
-    val contentValues = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, nomeFinal)
-        put(MediaStore.MediaColumns.MIME_TYPE, "text/csv")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CEPEC")
-    }
-    val uri = context.contentResolver.insert(contentUri, contentValues)
-    uri?.let { targetUri ->
-        try {
-            context.contentResolver.openOutputStream(targetUri)?.use { out ->
-                BufferedWriter(OutputStreamWriter(out, StandardCharsets.UTF_8)).use { writer ->
-                    // Colunas 0..8 mantêm a ordem esperada pelo CacauSync; as novas ficam no FIM.
-                    val header = listOf("Campanha", "ID_Gerado", l1, l2, l3, "Resultado", "Data", "Lat", "Lng", "Total_Frutos", "Sadios", "Vassoura", "Podridao", "Nao_Avaliavel", "Deteccoes_YOLO")
-                        .joinToString(",") { csvField(it) }
-                    writer.write(header); writer.newLine()
-                    registros.forEach { reg ->
-                        val itemPrincipal = reg.plantId.split("_").firstOrNull() ?: ""
-                        val linha = formatarLinhaCsvPersonalizado(reg, itemPrincipal)
-                        writer.write(linha); writer.newLine()
-                    }
-                    writer.flush()
-                }
-            }
-            Toast.makeText(context, "Planilha exportada com sucesso!", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Erro: ${e.message}", Toast.LENGTH_LONG).show()
+    val conteudo = buildString {
+        val header = listOf("Campanha", "ID_Gerado", l1, l2, l3, "Resultado", "Data", "Lat", "Lng", "Total_Frutos", "Sadios", "Vassoura", "Podridao", "Nao_Avaliavel", "Deteccoes_YOLO")
+            .joinToString(",") { csvField(it) }
+        appendLine(header)
+        registros.forEach { reg ->
+            val itemPrincipal = reg.plantId.split("_").firstOrNull() ?: ""
+            appendLine(formatarLinhaCsvPersonalizado(reg, itemPrincipal))
         }
+    }
+
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, nomeFinal)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/csv")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CEPEC")
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            if (uri != null) {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(conteudo.toByteArray(StandardCharsets.UTF_8))
+                }
+                Toast.makeText(context, "Planilha exportada com sucesso!", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+        // Fallback robusto para Android < Q (API < 29, ex.: Galaxy A50 com Android 9)
+        val downloadDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "CEPEC")
+        if (!downloadDir.exists()) downloadDir.mkdirs()
+        val file = File(downloadDir, nomeFinal)
+        FileOutputStream(file).use { out ->
+            out.write(conteudo.toByteArray(StandardCharsets.UTF_8))
+        }
+        Toast.makeText(context, "Planilha exportada em Downloads/CEPEC!", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Toast.makeText(context, "Erro ao exportar CSV: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }

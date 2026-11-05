@@ -103,7 +103,7 @@ class DomainConcordanceIntegrationTest {
             ensaioManual = ensaio,
             parcelaManual = parcela,
             diagnostico = diagnostico,
-            data = "04/11 14:30",
+            data = "05/11/2026 14:30:15",
             numPlanta = numPlanta,
             lat = -14.793889,
             lng = -39.049444,
@@ -213,7 +213,7 @@ class DomainConcordanceIntegrationTest {
         assertEquals("1", colunas[3])                // Parcela
         assertEquals("1", colunas[4])                // Planta
         assertEquals("3", colunas[5])                // Resultado (numérico)
-        assertEquals("04/11 14:30", colunas[6])      // Data
+        assertEquals("05/11/2026 14:30:15", colunas[6]) // Data (com ano e segundos)
         assertEquals("-14.793889", colunas[7])       // Lat
         assertEquals("-39.049444", colunas[8])       // Lng
         assertEquals("3", colunas[9])                // Total_Frutos

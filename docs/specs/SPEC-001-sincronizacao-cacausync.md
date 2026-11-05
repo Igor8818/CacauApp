@@ -16,7 +16,7 @@ Garantir a sincronização determinística, resiliente e idempotente das coletas
 - Payload (`SyncJsonRequest`):
   - `codigoEnsaio`: String em maiúsculas e sem espaços nas bordas (ex: `"TC-1801"`).
   - `leituras[]`: Lista de objetos contendo:
-    - `campanha`, `plantId`, `clone`, `parcela`, `planta`, `data`, `lat`, `lng`.
+    - `campanha`, `plantId`, `clone`, `parcela`, `planta`, `data` (formato canônico `"dd/MM/yyyy HH:mm:ss"` com ano e segundos para evitar colisão de `chaveIdempotencia` em re-coletas no mesmo minuto; aceita `"dd/MM HH:mm"` por retrocompatibilidade), `lat`, `lng`.
     - `resultado`: **DEVE** ser estritamente um número inteiro em formato String (ex: `"12"`) ou a literal exata `"Não Coletável"`. Qualquer outro texto deve ser rejeitado.
     - `deteccoes[]`: Lista de caixas auditadas com:
       - `classe`: `"Sadio"`, `"Vassoura de Bruxa"`, `"Podridão"` ou `"Não Avaliável"`.

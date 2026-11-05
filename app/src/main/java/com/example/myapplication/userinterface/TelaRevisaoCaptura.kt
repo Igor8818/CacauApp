@@ -84,6 +84,7 @@ fun TelaRevisaoCaptura(
     bitmapWidthRef: Float,
     bitmapHeightRef: Float,
     detectorHelper: ObjectDetectorHelper? = null,
+    labelsFiltro: List<String> = listOf("cacau", "fruto"),
     onConfirmar: (
         diagnostico: String,
         total: Int,
@@ -157,6 +158,13 @@ fun TelaRevisaoCaptura(
 
                 withContext(Dispatchers.Main) {
                     res.deteccoes.forEach { det ->
+                        val cat = det.categories.firstOrNull()
+                        val label = (cat?.label ?: "cacau").lowercase()
+                        val labelValido = labelsFiltro.isEmpty() ||
+                            labelsFiltro.any { f -> label.contains(f.lowercase()) } ||
+                            label == "cacau" || label == "fruto"
+                        if (!labelValido) return@forEach
+
                         val r = det.boundingBox
                         val nL = (r.left / bmpW).coerceIn(0f, 1f)
                         val nT = (r.top / bmpH).coerceIn(0f, 1f)
@@ -175,7 +183,7 @@ fun TelaRevisaoCaptura(
                                     normBottom = nB,
                                     estado = EstadoFruto.SADIO,
                                     manual = false,
-                                    confianca = det.categories.firstOrNull()?.score ?: 0.85f
+                                    confianca = cat?.score ?: 0.85f
                                 )
                             )
                         }
