@@ -87,6 +87,21 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 
 ---
 
+## 🏛️ Engenharia de Software & Governança por Especificações (SDD)
+
+Este projeto foi construído seguindo os mais altos padrões de **Engenharia de Software Moderna**:
+
+* **Fonte Primária de Verdade Agronômica ([`docs/REGRAS_DE_NEGOCIO.md`](docs/REGRAS_DE_NEGOCIO.md)):** Regras de negócio estritas de campo (`RN-MOB-01` a `RN-MOB-05`) que determinam a primazia da revisão humana fitossanitária sobre a inferência bruta da IA.
+* **Contratos Formais Cross-Stack ([`docs/specs/`](docs/specs/)):**
+  * `SPEC-000`: Matriz de concordância técnica Mobile ↔ API ↔ CSV ↔ Web.
+  * `SPEC-001`: Protocolo de sincronização idempotente e gerenciamento de memória.
+  * `SPEC-002`: Algoritmo matemático de Letterbox isomórfico (YOLO) e projeção de coordenadas.
+  * `SPEC-003`: Fórmulas de produtividade líquida comercial (kg/ha e @/ha) para clones de cacaueiro.
+* **Auditoria Contínua por Subagentes de Contexto Zero ([`AGENTS.md`](AGENTS.md)):** Validação automatizada por múltiplos subagentes de IA especializados que auditam concorrência, conformidade matemática e segurança sem viés.
+* **Testes Automatizados de Ponta a Ponta:** Suíte de testes unitários cobrindo geometria, NMS, parsing RFC 4180 e contratos de domínio com o back-end.
+
+---
+
 ## 🏗️ Como Compilar e Instalar
 
 ### Pré-requisitos

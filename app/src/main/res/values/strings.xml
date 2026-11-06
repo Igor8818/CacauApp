@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">My Application</string>
+    <string name="app_name">CacauApp</string>
+    <string name="app_description">Visão Computacional e Auditoria Fitossanitária de Cacau</string>
+    <string name="institution_name">CEPEC / CEPLAC</string>
 </resources>

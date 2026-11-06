@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Permite conexões HTTP em claro na rede local da CEPLAC e ambiente de desenvolvimento -->
+    <!--
+      Configuração de Segurança de Rede (CacauApp):
+      Permite tráfego HTTP em claro EXCLUSIVAMENTE para sincronização em redes locais (LAN)
+      de estações experimentais agrícolas e fazendas de pesquisa (CEPEC/CEPLAC), onde o servidor
+      CacauSync opera localmente sem acesso à internet pública nem certificados TLS assinados.
+      Em ambiente de produção com domínio institucional público, deve-se aplicar domain-config
+      com HTTPS obrigatório (cleartextTrafficPermitted="false").
+    -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

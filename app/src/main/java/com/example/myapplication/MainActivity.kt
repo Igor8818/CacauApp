@@ -1038,7 +1038,8 @@ fun TelaCheckInSimples(ensaio: String, onEnsaioChange: (String) -> Unit, exibirB
     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(Icons.Default.Eco, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(64.dp))
         Spacer(Modifier.height(16.dp))
-        Text("IaGenericInterpreter", fontSize = 26.sp, fontWeight = FontWeight.Black, color = Color(0xFF1B5E20))
+        Text("CacauApp", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color(0xFF1B5E20))
+        Text("CEPEC / CEPLAC • Avaliação de Clones", fontSize = 13.sp, color = Color(0xFF388E3C), fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(32.dp))
         OutlinedTextField(value = ensaio, onValueChange = onEnsaioChange, label = { Text("Nome da Campanha de Monitoramento") }, placeholder = { Text("Ex: TC_LOTE_2026") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(32.dp))
@@ -1080,7 +1081,7 @@ fun DialogConfiguracaoServidor(
                     value = url,
                     onValueChange = { url = it },
                     label = { Text("URL do Servidor") },
-                    placeholder = { Text("http://192.168.1.50:8080") },
+                    placeholder = { Text("http://10.0.2.2:8080 ou IP local:8080") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
