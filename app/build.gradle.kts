@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "br.gov.ceplac.cepec.cacauapp"
+        applicationId = "com.example.myapplication"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
