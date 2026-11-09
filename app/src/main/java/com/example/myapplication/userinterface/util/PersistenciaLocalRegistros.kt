@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import android.util.AtomicFile
 import android.util.Log
+import com.example.myapplication.data.ModelConfig
+import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.userinterface.EstadoFruto
@@ -198,6 +200,80 @@ object PersistenciaLocalRegistros {
             } catch (_: Throwable) {
                 error("Não foi possível instanciar android.net.Uri no ambiente atual")
             }
+        }
+    }
+
+    private const val PREFS_MODELO = "cacau_model_prefs"
+    private const val KEY_MODELO_ARQUIVO = "modelo_arquivo"
+    private const val KEY_EXTERNO_URI = "externo_uri"
+    private const val KEY_EXTERNO_NOME = "externo_nome"
+    private const val KEY_THRESHOLD = "threshold"
+    private const val KEY_MAX_RESULTADOS = "max_resultados"
+    private const val KEY_LABELS = "labels_filtro"
+
+    fun salvarConfiguracaoModelo(context: Context, config: ModelConfig) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_MODELO, Context.MODE_PRIVATE)
+            val labelsJson = JSONArray().apply {
+                config.labelsFiltro.forEach { put(it) }
+            }.toString()
+
+            prefs.edit()
+                .putString(KEY_MODELO_ARQUIVO, config.modeloSelecionado?.nomeArquivo)
+                .putString(KEY_EXTERNO_URI, config.modeloExternoUri?.toString())
+                .putString(KEY_EXTERNO_NOME, config.modeloExternoNome)
+                .putFloat(KEY_THRESHOLD, config.threshold)
+                .putInt(KEY_MAX_RESULTADOS, config.maxResultados)
+                .putString(KEY_LABELS, labelsJson)
+                .apply()
+        } catch (e: Exception) {
+            Log.e("PersistenciaLocal", "Erro ao salvar configuracao do modelo: ${e.message}")
+        }
+    }
+
+    fun carregarConfiguracaoModelo(context: Context): ModelConfig {
+        return try {
+            val prefs = context.getSharedPreferences(PREFS_MODELO, Context.MODE_PRIVATE)
+            val threshold = prefs.getFloat(KEY_THRESHOLD, 0.30f)
+            val maxResultados = prefs.getInt(KEY_MAX_RESULTADOS, 25)
+            val modeloArquivo = prefs.getString(KEY_MODELO_ARQUIVO, null)
+            val externoUriStr = prefs.getString(KEY_EXTERNO_URI, null)
+            val externoNome = prefs.getString(KEY_EXTERNO_NOME, "") ?: ""
+            val labelsJson = prefs.getString(KEY_LABELS, null)
+
+            val labels = if (!labelsJson.isNullOrBlank()) {
+                try {
+                    val arr = JSONArray(labelsJson)
+                    (0 until arr.length()).map { arr.getString(it) }
+                } catch (_: Exception) {
+                    listOf("cacau", "fruto")
+                }
+            } else {
+                listOf("cacau", "fruto")
+            }
+
+            val modeloEmbutido = if (externoUriStr.isNullOrBlank()) {
+                MODELOS_EMBUTIDOS.firstOrNull { it.nomeArquivo == modeloArquivo }
+                    ?: MODELOS_EMBUTIDOS.firstOrNull()
+            } else {
+                null
+            }
+
+            val externoUri = if (!externoUriStr.isNullOrBlank()) {
+                safeParseUri(externoUriStr)
+            } else null
+
+            ModelConfig(
+                modeloSelecionado = modeloEmbutido,
+                modeloExternoUri = externoUri,
+                modeloExternoNome = externoNome,
+                labelsFiltro = labels,
+                threshold = threshold,
+                maxResultados = maxResultados
+            )
+        } catch (e: Exception) {
+            Log.e("PersistenciaLocal", "Erro ao carregar configuracao do modelo: ${e.message}")
+            ModelConfig(modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull())
         }
     }
 }

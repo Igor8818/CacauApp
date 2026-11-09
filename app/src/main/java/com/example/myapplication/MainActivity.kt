@@ -129,17 +129,11 @@ fun AppCacauCEPEC() {
         }
     }
 
-    // ── CONFIGURAÇÃO DE MODELO (nova) ──
+    // ── CONFIGURAÇÃO DE MODELO (persistida via SharedPreferences) ──
     var modelConfig by remember {
-        mutableStateOf(
-            ModelConfig(
-                modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull(),
-                labelsFiltro = MODELOS_EMBUTIDOS.firstOrNull()?.labelsDefault ?: listOf("cacau"),
-                threshold = 0.30f,
-                maxResultados = 25
-            )
-        )
+        mutableStateOf(PersistenciaLocalRegistros.carregarConfiguracaoModelo(context))
     }
+    var registroParaEdicao by remember { mutableStateOf<RegistroCacau?>(null) }
 
     val launcherArquivoCSV = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
@@ -195,13 +189,71 @@ fun AppCacauCEPEC() {
 
     // ── ROTEAMENTO DE TELAS ──
     when {
+        registroParaEdicao != null -> {
+            val reg = registroParaEdicao!!
+            val detectorHelperRevisao = remember(modelConfig) {
+                val cfg = modelConfig
+                val extUri = cfg.modeloExternoUri
+                val emb = cfg.modeloSelecionado
+                val source = when {
+                    extUri != null ->
+                        ObjectDetectorHelper.ModelSource.External(extUri, cfg.modeloExternoNome)
+                    emb != null ->
+                        ObjectDetectorHelper.ModelSource.Asset(emb.nomeArquivo)
+                    else -> ObjectDetectorHelper.ModelSource.Asset("detector.tflite")
+                }
+                ObjectDetectorHelper(
+                    context = context,
+                    detectorListener = null,
+                    modelSource = source,
+                    scoreThreshold = cfg.threshold,
+                    maxResults = cfg.maxResultados
+                )
+            }
+            DisposableEffect(detectorHelperRevisao) {
+                onDispose { detectorHelperRevisao.fechar() }
+            }
+
+            TelaRevisaoCaptura(
+                fotoUri = reg.uri,
+                plantId = reg.plantId,
+                deteccoesIniciais = emptyList(),
+                bitmapWidthRef = 1f,
+                bitmapHeightRef = 1f,
+                detectorHelper = detectorHelperRevisao,
+                labelsFiltro = modelConfig.labelsFiltro,
+                caixasAuditadasIniciais = reg.caixas,
+                onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixasNovas ->
+                    val idx = listaRegistros.indexOfFirst { it.plantId == reg.plantId }
+                    if (idx != -1) {
+                        listaRegistros[idx] = listaRegistros[idx].copy(
+                            diagnostico = diag,
+                            totalFrutos = total,
+                            sadios = sadios,
+                            vassoura = vassoura,
+                            podridao = podridao,
+                            naoAvaliavel = naoAvail,
+                            caixas = caixasNovas
+                        )
+                        PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
+                        Toast.makeText(context, "Registro ${reg.plantId} atualizado!", Toast.LENGTH_SHORT).show()
+                    }
+                    registroParaEdicao = null
+                },
+                onRefazer = {
+                    registroParaEdicao = null
+                }
+            )
+        }
+
         mostrarTelaModelo -> {
             TelaConfiguracaoModelo(
                 configAtual = modelConfig,
                 onSalvar = { novaConfig ->
                     modelConfig = novaConfig
+                    PersistenciaLocalRegistros.salvarConfiguracaoModelo(context, novaConfig)
                     mostrarTelaModelo = false
-                    Toast.makeText(context, "Modelo \"${novaConfig.nomeExibicao}\" ativado!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Modelo \"${novaConfig.nomeExibicao}\" ativado e salvo!", Toast.LENGTH_SHORT).show()
                 },
                 onVoltar = { mostrarTelaModelo = false }
             )
@@ -355,7 +407,25 @@ fun AppCacauCEPEC() {
                                 PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
                             }
                         )
-                        2 -> TelaGaleria(listaRegistros, ensaioNome, labelVariavel1, labelVariavel2, labelVariavel3)
+                        2 -> TelaGaleria(
+                            registros = listaRegistros,
+                            ensaio = ensaioNome,
+                            l1 = labelVariavel1,
+                            l2 = labelVariavel2,
+                            l3 = labelVariavel3,
+                            onEditarRegistro = { reg ->
+                                if (reg.uri != Uri.EMPTY) {
+                                    registroParaEdicao = reg
+                                } else {
+                                    Toast.makeText(context, "Planta sem foto para revisão de caixas.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onExcluirRegistro = { reg ->
+                                listaRegistros.remove(reg)
+                                PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
+                                Toast.makeText(context, "Registro excluído.", Toast.LENGTH_SHORT).show()
+                            }
+                        )
                     }
                 }
             }
@@ -443,6 +513,23 @@ fun TelaPrincipalCapturaOtimizada(
         ImageCapture.Builder()
             .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
             .build()
+    }
+
+    val launcherGaleriaColeta = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let { galeriaUri ->
+            val arqLocal = copiarUriGaleriaParaArquivoLocal(context, galeriaUri)
+            if (arqLocal != null) {
+                val pVal = if (isNum2) "$parcelaNum" else parcelaTxt
+                val plVal = if (isNum3) "$plantaNum" else plantaTxt
+                idParaRevisao = "${cloneVal}_P${pVal}_Pl${plVal}"
+                fotoParaRevisao = Uri.fromFile(arqLocal)
+                caixasCapturadas = emptyList()
+                bitmapWidthCapturado = 1f
+                bitmapHeightCapturado = 1f
+            } else {
+                Toast.makeText(context, "Erro ao carregar foto da galeria.", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // Recria o detector quando a config de modelo mudar
@@ -565,8 +652,32 @@ fun TelaPrincipalCapturaOtimizada(
             OutlinedButton(onClick = { onSave(Uri.EMPTY, "Não Coletável", 0, 0, 0, 0, 0, emptyList()) }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                 Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA NÃO COLETÁVEL")
             }
-            Button(onClick = { cameraAtiva = true }, enabled = isCloneValido, modifier = Modifier.fillMaxWidth().height(64.dp), shape = RoundedCornerShape(12.dp)) {
-                Icon(Icons.Default.PhotoCamera, null); Spacer(Modifier.width(8.dp)); Text("ABRIR CÂMERA")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { launcherGaleriaColeta.launch("image/*") },
+                    enabled = isCloneValido,
+                    modifier = Modifier.weight(1f).height(60.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2E7D32))
+                ) {
+                    Icon(Icons.Default.Image, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("GALERIA", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = { cameraAtiva = true },
+                    enabled = isCloneValido,
+                    modifier = Modifier.weight(1.3f).height(60.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                ) {
+                    Icon(Icons.Default.PhotoCamera, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("ABRIR CÂMERA", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     } else {
@@ -743,6 +854,20 @@ fun TelaModoFieldBook(
             .build()
     }
 
+    val launcherGaleriaRota = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let { galeriaUri ->
+            val arqLocal = copiarUriGaleriaParaArquivoLocal(context, galeriaUri)
+            if (arqLocal != null) {
+                fotoParaRevisao = Uri.fromFile(arqLocal)
+                caixasCapturadas = emptyList()
+                bitmapWidthCapturado = 1f
+                bitmapHeightCapturado = 1f
+            } else {
+                Toast.makeText(context, "Erro ao carregar foto da galeria.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val detectorHelper = remember(modelConfig) {
         val source = when {
             modelConfig.modeloExternoUri != null ->
@@ -848,8 +973,27 @@ fun TelaModoFieldBook(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { if (indiceAtual > 0) indiceAtual-- }, enabled = indiceAtual > 0) { Icon(Icons.Default.ArrowBackIos, null, modifier = Modifier.size(36.dp), tint = if (indiceAtual > 0) Color(0xFF2E7D32) else Color.Gray) }
-                    Button(onClick = { cameraAtiva = true }, enabled = isPontoValido, modifier = Modifier.height(56.dp).weight(1f).padding(horizontal = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
-                        Icon(Icons.Default.PhotoCamera, null); Text(if (pontoAtual.coletado) " REFAZER FOTO" else " ABRIR CÂMERA")
+                    OutlinedButton(
+                        onClick = { launcherGaleriaRota.launch("image/*") },
+                        enabled = isPontoValido,
+                        modifier = Modifier.height(56.dp).padding(horizontal = 4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2E7D32)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Image, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("GALERIA", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { cameraAtiva = true },
+                        enabled = isPontoValido,
+                        modifier = Modifier.height(56.dp).weight(1f).padding(end = 4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (pontoAtual.coletado) "REFAZER" else "CÂMERA", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     IconButton(onClick = { if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = indiceAtual < rotaCompleta.size - 1) { Icon(Icons.Default.ArrowForwardIos, null, modifier = Modifier.size(36.dp), tint = if (indiceAtual < rotaCompleta.size - 1) Color(0xFF2E7D32) else Color.Gray) }
                 }
@@ -1168,7 +1312,15 @@ fun DialogConfiguracaoServidor(
 }
 
 @Composable
-fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: String, l3: String) {
+fun TelaGaleria(
+    registros: List<RegistroCacau>,
+    ensaio: String,
+    l1: String,
+    l2: String,
+    l3: String,
+    onEditarRegistro: (RegistroCacau) -> Unit = {},
+    onExcluirRegistro: (RegistroCacau) -> Unit = {}
+) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE) }
@@ -1177,6 +1329,32 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
     var sincronizando by remember { mutableStateOf(false) }
     var statusSyncMensagem by remember { mutableStateOf("") }
     var resultadoSyncDialog by remember { mutableStateOf<String?>(null) }
+    var registroParaExcluir by remember { mutableStateOf<RegistroCacau?>(null) }
+
+    if (registroParaExcluir != null) {
+        AlertDialog(
+            onDismissRequest = { registroParaExcluir = null },
+            title = { Text("Excluir Registro?", fontWeight = FontWeight.Bold) },
+            text = { Text("Deseja realmente remover o registro da planta \"${registroParaExcluir!!.plantId}\"? Esta ação não pode ser desfeita localmente.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val reg = registroParaExcluir!!
+                        registroParaExcluir = null
+                        onExcluirRegistro(reg)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                ) {
+                    Text("Excluir")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { registroParaExcluir = null }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
 
     if (mostrarConfigServidor) {
         DialogConfiguracaoServidor(
@@ -1330,16 +1508,34 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                                     Text("Sadios: ${reg.sadios} • Vassoura: ${reg.vassoura} • Podridão: ${reg.podridao}", fontSize = 11.sp, color = Color(0xFF2E7D32))
                                 }
                             }
-                            // Ícone de status de sincronização
-                            when (reg.statusSync) {
-                                "SINCRONIZADO" -> {
-                                    Icon(Icons.Default.CloudDone, "Sincronizado", tint = Color(0xFF2E7D32), modifier = Modifier.size(24.dp))
+
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                if (reg.uri != Uri.EMPTY) {
+                                    IconButton(
+                                        onClick = { onEditarRegistro(reg) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, "Editar / Revisar Caixas", tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
+                                    }
                                 }
-                                "ERRO" -> {
-                                    Icon(Icons.Default.CloudOff, "Erro", tint = Color.Red, modifier = Modifier.size(24.dp))
+                                IconButton(
+                                    onClick = { registroParaExcluir = reg },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, "Excluir Registro", tint = Color(0xFFC62828), modifier = Modifier.size(18.dp))
                                 }
-                                else -> {
-                                    Icon(Icons.Default.Schedule, "Pendente", tint = Color(0xFFFFA000), modifier = Modifier.size(20.dp))
+
+                                // Ícone de status de sincronização
+                                when (reg.statusSync) {
+                                    "SINCRONIZADO" -> {
+                                        Icon(Icons.Default.CloudDone, "Sincronizado", tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp).padding(start = 4.dp))
+                                    }
+                                    "ERRO" -> {
+                                        Icon(Icons.Default.CloudOff, "Erro", tint = Color.Red, modifier = Modifier.size(20.dp).padding(start = 4.dp))
+                                    }
+                                    else -> {
+                                        Icon(Icons.Default.Schedule, "Pendente", tint = Color(0xFFFFA000), modifier = Modifier.size(18.dp).padding(start = 4.dp))
+                                    }
                                 }
                             }
                         }
@@ -1347,6 +1543,25 @@ fun TelaGaleria(registros: List<RegistroCacau>, ensaio: String, l1: String, l2: 
                 }
             }
         }
+    }
+}
+
+/**
+ * Copia uma imagem selecionada na galeria para o diretório privado do aplicativo,
+ * garantindo caminho de arquivo real e persistência permanente no dispositivo.
+ */
+fun copiarUriGaleriaParaArquivoLocal(context: Context, uriOrigem: Uri): File? {
+    return try {
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir
+        val arquivoDestino = File(dir, "CACAU_GAL_${System.currentTimeMillis()}.jpg")
+        context.contentResolver.openInputStream(uriOrigem)?.use { input ->
+            arquivoDestino.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        arquivoDestino
+    } catch (e: Exception) {
+        null
     }
 }
 

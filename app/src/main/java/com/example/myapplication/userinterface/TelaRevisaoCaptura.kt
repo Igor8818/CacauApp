@@ -63,7 +63,170 @@ data class CaixaAuditavel(
     val estado: EstadoFruto = EstadoFruto.SADIO,
     val manual: Boolean = false,
     val confianca: Float = 0.90f
+) {
+    val centroX: Float get() = (normLeft + normRight) / 2f
+    val centroY: Float get() = (normTop + normBottom) / 2f
+    val largura: Float get() = (normRight - normLeft).coerceAtLeast(0f)
+    val altura: Float get() = (normBottom - normTop).coerceAtLeast(0f)
+}
+
+/**
+ * Seleciona o índice da caixa tocada na foto.
+ * Em cachos densos / frutos agrupados no tronco (almofadas florais), prioriza
+ * as caixas que realmente contêm o toque e desempata pela menor distância ao centro.
+ */
+internal fun selecionarIndiceCaixaNoToque(
+    caixas: List<CaixaAuditavel>,
+    normTapX: Float,
+    normTapY: Float,
+    margemNormX: Float = 0.03f,
+    margemNormY: Float = 0.03f
+): Int {
+    if (caixas.isEmpty()) return -1
+
+    var melhorIndice = -1
+    var melhorDistancia = Float.MAX_VALUE
+    var melhorEstritamenteDentro = false
+
+    for (i in caixas.indices) {
+        val c = caixas[i]
+        val dentroEstrito = normTapX in c.normLeft..c.normRight && normTapY in c.normTop..c.normBottom
+        val dentroComMargem = normTapX in (c.normLeft - margemNormX)..(c.normRight + margemNormX) &&
+                normTapY in (c.normTop - margemNormY)..(c.normBottom + margemNormY)
+
+        if (dentroComMargem) {
+            val dx = normTapX - c.centroX
+            val dy = normTapY - c.centroY
+            val distSq = dx * dx + dy * dy
+
+            if (dentroEstrito && !melhorEstritamenteDentro) {
+                melhorEstritamenteDentro = true
+                melhorDistancia = distSq
+                melhorIndice = i
+            } else if (dentroEstrito == melhorEstritamenteDentro) {
+                if (distSq < melhorDistancia) {
+                    melhorDistancia = distSq
+                    melhorIndice = i
+                }
+            }
+        }
+    }
+
+    return melhorIndice
+}
+
+/**
+ * Redimensiona a caixa proporcionalmente a partir do centro (para ajustar frutos pequenos ou grandes).
+ */
+internal fun redimensionarCaixaAuditavel(
+    caixa: CaixaAuditavel,
+    fatorEscala: Float,
+    minDim: Float = 0.03f,
+    maxDim: Float = 0.70f
+): CaixaAuditavel {
+    val cx = caixa.centroX
+    val cy = caixa.centroY
+    val novaLargura = (caixa.largura * fatorEscala).coerceIn(minDim, maxDim)
+    val novaAltura = (caixa.altura * fatorEscala).coerceIn(minDim, maxDim)
+
+    val halfW = novaLargura / 2f
+    val halfH = novaAltura / 2f
+
+    val nL = (cx - halfW).coerceIn(0f, 1f - novaLargura)
+    val nT = (cy - halfH).coerceIn(0f, 1f - novaAltura)
+    val nR = (nL + novaLargura).coerceIn(0f, 1f)
+    val nB = (nT + novaAltura).coerceIn(0f, 1f)
+
+    return caixa.copy(
+        normLeft = nL,
+        normTop = nT,
+        normRight = nR,
+        normBottom = nB
+    )
+}
+
+/**
+ * Modelo desacoplado para representar detecção candidata a Coordinate Snapping na foto estática.
+ */
+data class DetEstilizada(
+    val normLeft: Float,
+    val normTop: Float,
+    val normRight: Float,
+    val normBottom: Float,
+    val confianca: Float,
+    val estado: EstadoFruto = EstadoFruto.SADIO
 )
+
+/**
+ * Realiza a fusão com "Coordinate Snapping":
+ * - Se a detecção da foto estática casar (IoU > 0.20f) com uma caixa automática existente,
+ *   atualiza suas coordenadas para o ponto 100% cravado da foto estática (eliminando desalinhamento de movimento);
+ * - Preserva a classificação do usuário caso ele já tenha marcado Vassoura/Podridão/etc;
+ * - Respeita caixas manuais e caixas excluídas;
+ * - Adiciona frutos novos detectados na foto estática que não haviam sido capturados no preview.
+ */
+internal fun fundirDeteccoesComSnapping(
+    caixasAtuais: List<CaixaAuditavel>,
+    deteccoesEstaticas: List<DetEstilizada>,
+    caixasExcluidas: List<CaixaAuditavel>
+): List<CaixaAuditavel> {
+    if (deteccoesEstaticas.isEmpty()) return caixasAtuais
+
+    val resultado = caixasAtuais.toMutableList()
+    val indicesPareados = mutableSetOf<Int>()
+
+    for (det in deteccoesEstaticas) {
+        // Ignora se colidir com algo que o usuário excluiu manualmente
+        val foiExcluida = caixasExcluidas.any { ex ->
+            iouNorm(ex, det.normLeft, det.normTop, det.normRight, det.normBottom) > 0.35f
+        }
+        if (foiExcluida) continue
+
+        // Procura a caixa automática com maior sobreposição (IoU > 0.20f)
+        var melhorIdx = -1
+        var melhorIou = 0.20f
+
+        for (i in resultado.indices) {
+            if (i in indicesPareados) continue
+            val c = resultado[i]
+            if (c.manual) continue // caixas manuais são intocáveis pelo modelo
+
+            val iou = iouNorm(c, det.normLeft, det.normTop, det.normRight, det.normBottom)
+            if (iou > melhorIou) {
+                melhorIou = iou
+                melhorIdx = i
+            }
+        }
+
+        if (melhorIdx >= 0) {
+            indicesPareados.add(melhorIdx)
+            val existente = resultado[melhorIdx]
+            // SNAP: atualiza para a coordenada exata da foto estática preservando o estado selecionado pelo usuário
+            resultado[melhorIdx] = existente.copy(
+                normLeft = det.normLeft,
+                normTop = det.normTop,
+                normRight = det.normRight,
+                normBottom = det.normBottom,
+                confianca = maxOf(existente.confianca, det.confianca)
+            )
+        } else {
+            // Fruto novo detectado na foto estática
+            resultado.add(
+                CaixaAuditavel(
+                    normLeft = det.normLeft,
+                    normTop = det.normTop,
+                    normRight = det.normRight,
+                    normBottom = det.normBottom,
+                    estado = det.estado,
+                    manual = false,
+                    confianca = det.confianca
+                )
+            )
+        }
+    }
+
+    return resultado
+}
 
 /**
  * Tela de Revisão Pós-Captura / Pós-Processamento:
@@ -85,6 +248,7 @@ fun TelaRevisaoCaptura(
     bitmapHeightRef: Float,
     detectorHelper: ObjectDetectorHelper? = null,
     labelsFiltro: List<String> = listOf("cacau", "fruto"),
+    caixasAuditadasIniciais: List<CaixaAuditavel>? = null,
     onConfirmar: (
         diagnostico: String,
         total: Int,
@@ -101,22 +265,26 @@ fun TelaRevisaoCaptura(
     // Caixas de detecção normalizadas
     val caixas = remember(fotoUri) {
         mutableStateListOf<CaixaAuditavel>().apply {
-            val wRef = bitmapWidthRef.coerceAtLeast(1f)
-            val hRef = bitmapHeightRef.coerceAtLeast(1f)
-            deteccoesIniciais.forEach { det ->
-                val rect = det.boundingBox
-                val score = det.categories.firstOrNull()?.score ?: 0.85f
-                add(
-                    CaixaAuditavel(
-                        normLeft = (rect.left / wRef).coerceIn(0f, 1f),
-                        normTop = (rect.top / hRef).coerceIn(0f, 1f),
-                        normRight = (rect.right / wRef).coerceIn(0f, 1f),
-                        normBottom = (rect.bottom / hRef).coerceIn(0f, 1f),
-                        estado = EstadoFruto.SADIO,
-                        manual = false,
-                        confianca = score
+            if (!caixasAuditadasIniciais.isNullOrEmpty()) {
+                addAll(caixasAuditadasIniciais)
+            } else {
+                val wRef = bitmapWidthRef.coerceAtLeast(1f)
+                val hRef = bitmapHeightRef.coerceAtLeast(1f)
+                deteccoesIniciais.forEach { det ->
+                    val rect = det.boundingBox
+                    val score = det.categories.firstOrNull()?.score ?: 0.85f
+                    add(
+                        CaixaAuditavel(
+                            normLeft = (rect.left / wRef).coerceIn(0f, 1f),
+                            normTop = (rect.top / hRef).coerceIn(0f, 1f),
+                            normRight = (rect.right / wRef).coerceIn(0f, 1f),
+                            normBottom = (rect.bottom / hRef).coerceIn(0f, 1f),
+                            estado = EstadoFruto.SADIO,
+                            manual = false,
+                            confianca = score
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -136,7 +304,10 @@ fun TelaRevisaoCaptura(
                 ExifInterface(stream)
             }
             val orientation = exif?.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-            val rotated = orientation == ExifInterface.ORIENTATION_ROTATE_90 || orientation == ExifInterface.ORIENTATION_ROTATE_270
+            val rotated = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                    orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+                    orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+                    orientation == ExifInterface.ORIENTATION_TRANSVERSE
             val w = if (rotated) options.outHeight else options.outWidth
             val h = if (rotated) options.outWidth else options.outHeight
             if (w > 0 && h > 0) w.toFloat() / h.toFloat() else (3f / 4f)
@@ -145,8 +316,9 @@ fun TelaRevisaoCaptura(
         }
     }
 
-    // Re-inferência em background na foto estática capturada:
-    // Garante que mesmo se a mão do pesquisador tremeu ao clicar em CAPTURAR, os frutos na foto são detectados.
+    // Re-inferência em background na foto estática capturada com Coordinate Snapping:
+    // Faz o alinhamento exato (snap) dos quadradinhos sobre os frutos da foto estática,
+    // eliminando o atraso de movimento da mão ao disparar o obturador da câmera.
     LaunchedEffect(fotoUri) {
         val helper = detectorHelper ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
@@ -156,38 +328,41 @@ fun TelaRevisaoCaptura(
                 val bmpW = bmp.width.toFloat()
                 val bmpH = bmp.height.toFloat()
 
-                withContext(Dispatchers.Main) {
-                    res.deteccoes.forEach { det ->
-                        val cat = det.categories.firstOrNull()
-                        val label = (cat?.label ?: "cacau").lowercase()
-                        val labelValido = labelsFiltro.isEmpty() ||
+                val candidatasEstaticas = mutableListOf<DetEstilizada>()
+                res.deteccoes.forEach { det ->
+                    val cat = det.categories.firstOrNull()
+                    val label = (cat?.label ?: "cacau").lowercase()
+                    val labelValido = labelsFiltro.isEmpty() ||
                             labelsFiltro.any { f -> label.contains(f.lowercase()) } ||
                             label == "cacau" || label == "fruto"
-                        if (!labelValido) return@forEach
+                    if (!labelValido) return@forEach
 
-                        val r = det.boundingBox
-                        val nL = (r.left / bmpW).coerceIn(0f, 1f)
-                        val nT = (r.top / bmpH).coerceIn(0f, 1f)
-                        val nR = (r.right / bmpW).coerceIn(0f, 1f)
-                        val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
+                    val r = det.boundingBox
+                    val nL = (r.left / bmpW).coerceIn(0f, 1f)
+                    val nT = (r.top / bmpH).coerceIn(0f, 1f)
+                    val nR = (r.right / bmpW).coerceIn(0f, 1f)
+                    val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
 
-                        val jaExiste = caixas.any { c -> iouNorm(c, nL, nT, nR, nB) > 0.35f }
-                        val foiExcluida = caixasExcluidasManualmente.any { c -> iouNorm(c, nL, nT, nR, nB) > 0.35f }
+                    candidatasEstaticas.add(
+                        DetEstilizada(
+                            normLeft = nL,
+                            normTop = nT,
+                            normRight = nR,
+                            normBottom = nB,
+                            confianca = cat?.score ?: 0.85f,
+                            estado = EstadoFruto.SADIO
+                        )
+                    )
+                }
 
-                        if (!jaExiste && !foiExcluida) {
-                            caixas.add(
-                                CaixaAuditavel(
-                                    normLeft = nL,
-                                    normTop = nT,
-                                    normRight = nR,
-                                    normBottom = nB,
-                                    estado = EstadoFruto.SADIO,
-                                    manual = false,
-                                    confianca = cat?.score ?: 0.85f
-                                )
-                            )
-                        }
-                    }
+                withContext(Dispatchers.Main) {
+                    val fundidas = fundirDeteccoesComSnapping(
+                        caixasAtuais = caixas.toList(),
+                        deteccoesEstaticas = candidatasEstaticas,
+                        caixasExcluidas = caixasExcluidasManualmente.toList()
+                    )
+                    caixas.clear()
+                    caixas.addAll(fundidas)
                 }
             } finally {
                 bmp.recycle()
@@ -261,11 +436,14 @@ fun TelaRevisaoCaptura(
                                     val margemNormX = 24.dp.toPx() / displayedW
                                     val margemNormY = 24.dp.toPx() / displayedH
 
-                                    // Busca se clicou em uma caixa existente
-                                    val idxTocado = caixas.indexOfLast { c ->
-                                        normTapX in (c.normLeft - margemNormX)..(c.normRight + margemNormX) &&
-                                                normTapY in (c.normTop - margemNormY)..(c.normBottom + margemNormY)
-                                    }
+                                    // Busca se clicou em uma caixa existente com prioridade ao centro mais próximo
+                                    val idxTocado = selecionarIndiceCaixaNoToque(
+                                        caixas = caixas,
+                                        normTapX = normTapX,
+                                        normTapY = normTapY,
+                                        margemNormX = margemNormX,
+                                        margemNormY = margemNormY
+                                    )
 
                                     if (idxTocado >= 0) {
                                         indiceSelecionado = idxTocado
@@ -274,13 +452,13 @@ fun TelaRevisaoCaptura(
                                             indiceSelecionado = -1
                                         } else {
                                             // Tocou em área vazia da foto: adiciona nova caixa manual
-                                            val halfW = 0.08f
-                                            val halfH = 0.08f
+                                            val halfW = 0.07f
+                                            val halfH = 0.07f
                                             val nova = CaixaAuditavel(
-                                                normLeft = (normTapX - halfW).coerceIn(0f, 1f),
-                                                normTop = (normTapY - halfH).coerceIn(0f, 1f),
-                                                normRight = (normTapX + halfW).coerceIn(0f, 1f),
-                                                normBottom = (normTapY + halfH).coerceIn(0f, 1f),
+                                                normLeft = (normTapX - halfW).coerceIn(0f, 1f - halfW * 2),
+                                                normTop = (normTapY - halfH).coerceIn(0f, 1f - halfH * 2),
+                                                normRight = (normTapX + halfW).coerceIn(halfW * 2, 1f),
+                                                normBottom = (normTapY + halfH).coerceIn(halfH * 2, 1f),
                                                 estado = EstadoFruto.SADIO,
                                                 manual = true,
                                                 confianca = 1.0f
@@ -400,16 +578,44 @@ fun TelaRevisaoCaptura(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Fruto #${indiceSelecionado + 1} • Selecione a classificação:",
+                            "Fruto #${indiceSelecionado + 1}${if (caixaAtual.manual) " (Manual)" else ""} • Classifique:",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            fontSize = 12.sp
                         )
-                        IconButton(
-                            onClick = { indiceSelecionado = -1 },
-                            modifier = Modifier.size(24.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
+                            // Diminuir tamanho do quadradinho
+                            IconButton(
+                                onClick = {
+                                    caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 0.85f)
+                                },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
+                            ) {
+                                Text("-", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            }
+                            // Aumentar tamanho do quadradinho
+                            IconButton(
+                                onClick = {
+                                    caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 1.18f)
+                                },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
+                            ) {
+                                Text("+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = { indiceSelecionado = -1 },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
 
@@ -631,7 +837,7 @@ private fun ChipResumo(rotulo: String, total: Int, cor: Color) {
     }
 }
 
-private fun iouNorm(c: CaixaAuditavel, l: Float, t: Float, r: Float, b: Float): Float {
+internal fun iouNorm(c: CaixaAuditavel, l: Float, t: Float, r: Float, b: Float): Float {
     val interL = maxOf(c.normLeft, l)
     val interT = maxOf(c.normTop, t)
     val interR = minOf(c.normRight, r)
@@ -684,6 +890,14 @@ private fun carregarBitmapFoto(context: Context, uri: Uri, maxDim: Int = 1280): 
             ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
         }
 
         if (matrix.isIdentity) {

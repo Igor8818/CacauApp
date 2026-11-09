@@ -23,3 +23,6 @@ Dispare simultaneamente 3 chamadas a `invoke_subagent` (`TypeName: "research"`):
 3. **Subagente 3 — `Auditor de Concordância Cross-Stack (App ↔ Servidor)`:**
    - **Documento base:** `docs/REGRAS_DE_NEGOCIO.md` e `docs/specs/SPEC-000-matriz-concordancia-ecossistema.md`.
    - **Foco:** Confrontar linha a linha o que o Android envia/lê (`CacauSyncClient.kt`, `MainActivity.kt`, `RegistroCacau.kt`) com o que o Backend recebe/exporta (`SyncJsonRequest.java`, `DeteccaoDto.java`, `ColetaSyncService.java`, `CsvColetaParser.java`, `EnsaioService.java`).
+4. **Subagente 4 — `Auditor de Detecção YOLO e Campo (Prioridade Máxima)`:**
+   - **Skill dedicada:** [`.agents/skills/auditor-deteccao-campo/SKILL.md`](../auditor-deteccao-campo/SKILL.md).
+   - **Foco:** Auditar a detecção do `detector.tflite`, o alinhamento exato do quadradinho verde sobre o fruto na foto estática (*Coordinate Snapping* pós-captura + Letterbox `640x640` + EXIF), a seleção por distância ao centro em frutos agrupados, a classificação pós-foto nas 4 classes fitossanitárias e a adição/redimensionamento manual de frutos que o modelo não pegar.

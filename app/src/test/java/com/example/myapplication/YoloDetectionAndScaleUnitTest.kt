@@ -107,6 +107,33 @@ class YoloDetectionAndScaleUnitTest {
         assertEquals(0.88f, result[1][4], 0.001f)
     }
 
+    @Test
+    fun testDetectorTfliteAsset_BinaryIntegrityAndTensorContract() {
+        val candidates = listOf(
+            java.io.File("src/main/assets/detector.tflite"),
+            java.io.File("app/src/main/assets/detector.tflite")
+        )
+        val modelFile = candidates.firstOrNull { it.exists() }
+        assertNotNull("O modelo detector.tflite deve existir na pasta assets do projeto", modelFile)
+        assertTrue("O modelo detector.tflite deve ter mais de 10 MB (YOLOv8 Float32)", modelFile!!.length() > 10_000_000L)
+
+        // Verifica Magic Header FlatBuffer TFLite ("TFL3" nos bytes 4..7)
+        val header = ByteArray(16)
+        modelFile.inputStream().use { it.read(header) }
+        val magic = String(header, 4, 4, Charsets.US_ASCII)
+        assertEquals("Cabeçalho FlatBuffer TFLite válido (TFL3)", "TFL3", magic)
+
+        // Inspeciona o rodapé de metadados do grafo para confirmar tensor de entrada (inputs_0)
+        val tailSize = 200_000.coerceAtMost(modelFile.length().toInt())
+        val tailBytes = ByteArray(tailSize)
+        java.io.RandomAccessFile(modelFile, "r").use { raf ->
+            raf.seek(modelFile.length() - tailSize)
+            raf.readFully(tailBytes)
+        }
+        val tailAscii = String(tailBytes, Charsets.US_ASCII)
+        assertTrue("Grafo TFLite deve conter tensor de entrada 'inputs_0'", tailAscii.contains("inputs_0"))
+    }
+
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
         val sorted = boxes.sortedByDescending { it[4] }.toMutableList()
         val result = mutableListOf<FloatArray>()
