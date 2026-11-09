@@ -50,25 +50,27 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 
 ## ✨ Funcionalidades Principais
 
-* **⚡ Inferência de Edge AI em Tempo Real (YOLOv8 Float32):**
+* **⚡ Inferência de Edge AI em Tempo Real + Snap Geométrico Pós-Captura (YOLOv8 Float32):**
   * Detecção on-device a 30+ FPS via **TensorFlow Lite Interpreter** com 4 threads de CPU e suporte a aceleração gráfica GPU Delegate.
-  * Mapeamento matemático em aspecto fixo 4:3 (`Preview` e `ImageAnalysis`), garantindo caixas delimitadoras (*bounding boxes*) precisas sem distorções de lente em qualquer smartphone (testado em Xiaomi Redmi Note 13 Pro 5G e Samsung Galaxy A50).
-* **🔍 Tela de Revisão Pós-Captura Interativa (Human-in-the-Loop):**
-  * O pesquisador toca nas caixas verdes detectadas pela IA para classificar cada fruto individualmente:
+  * Mapeamento matemático em aspecto fixo 4:3 (`Preview` e `ImageAnalysis`) e **re-inferência estática de alta resolução pós-disparo** sobre a foto capturada (`ObjectDetectorHelper.detectStaticImage`), eliminando qualquer desalinhamento entre o preview e o clique do obturador (testado em Xiaomi Redmi Note 13 Pro 5G e Samsung Galaxy A50).
+* **🔍 Tela de Revisão Pós-Captura em Tela Cheia (Modo Imersivo Human-in-the-Loop):**
+  * Interface imersiva em tela cheia (tanto na captura da câmera quanto na análise de fotos da galeria) onde o pesquisador toca no fruto (seleção inteligente da caixa mais próxima em cachos densos) para classificá-lo:
     * 🟢 **Sadio**
     * 🟠 **Vassoura de Bruxa** (*Moniliophthora perniciosa*)
     * 🔴 **Podridão Parda** (*Phytophthora palmivora*)
     * ⚪ **Não Avaliável**
   * Toque em áreas vazias da foto para adicionar frutos não detectados manualmente com 100% de confiança;
-  * Botão de lixeira para remoção instantânea de falsos positivos;
+  * Controles dedicados e visíveis para **ajuste fino de tamanho (`−` Diminuir / `+` Aumentar)** e **botão explícito `🗑 Excluir`** para remoção imediata de marcações acidentais ou falsos positivos;
   * Resumo biométrico consolidado em tempo real por planta.
-* **🗺️ Modo Rota Guiada (FieldBook):**
-  * Importação de planilhas de planejamento experimental em CSV;
-  * Navegação sequencial ordenada por Parcela, Bloco e Planta com status visual de coleta.
-* **🌐 Sincronização Direta com o Laboratório (CacauSync API):**
-  * Diálogo com autenticação institucional JWT Bearer (`POST /api/v1/auth/login`);
-  * Envio em lote das coletas com caixas YOLO normalizadas (0.0 a 1.0) via `POST /api/v1/coletas/sync-json`;
-  * Upload assíncrono de fotos com compressão inteligente (JPEG 85%, máx 1600px), correção automática de orientação EXIF e decodificação econômica de memória (`inSampleSize`) para evitar *OutOfMemoryError*.
+* **🌱 Catálogo Nativo com os 104 Clones Reais do CEPEC (`ClonesCepec.kt`):**
+  * Autocompletar instantâneo na aba de Coleta Manual com todos os **104 clones oficiais do ensaio competitivo `TC-1801`** (incluindo séries `RB`, `CC`, `CEPEC`, `CCN-51`, `PS-13.19`, `PH-16`, `SJ-02`, `BN-34`, `TSA`, `TSH` e `VB`), eliminando erros de digitação em campo.
+* **🗺️ Modo Rota Inteligente (Planejamento 1-Clique PC ↔ Celular):**
+  * **Hot-Reload via Cabo USB:** Recebe automaticamente a planilha de rota enviada pelo pesquisador no PC (`files/rota_precarregada.json`) assim que a aba *Modo Rota* é aberta;
+  * **Botão `"PUXAR PLANILHA DO PC (1 CLIQUE)"`:** Baixa a rota atualizada diretamente da **CacauSync API** via cabo USB ou Wi-Fi local, ou permite importar arquivos `.csv` do aparelho;
+  * Navegação sequencial na **Ordem Exata da Planilha (`#1 → #N`)** por Parcela, Bloco, Planta e Clone, com avanço automático para a próxima planta pendente após cada foto auditada.
+* **🔌 Sincronização 1-Clique Zero-Config com o Laboratório (`CacauSyncClient`):**
+  * **Auto-Descoberta Inteligente (USB ADB Reverse + Scan Wi-Fi `/24`):** O botão `"SINCRONIZAR COM PC (1 CLIQUE)"` localiza automaticamente o servidor **CacauSync** via cabo USB (`127.0.0.1:8080`) ou varredura paralela na rede Wi-Fi local sem exigir digitação de IP nem seleção manual de arquivos;
+  * Autenticação automática JWT Bearer (`POST /api/v1/auth/login`), envio em lote das coletas com caixas YOLO normalizadas (`0.0` a `1.0`) via `POST /api/v1/coletas/sync-json` e upload assíncrono das fotos auditadas com compressão inteligente (JPEG 85%, máx 1600px) e proteção contra *OutOfMemoryError*.
 * **📊 Exportação Offline em Planilha (RFC 4180):**
   * Geração instantânea de arquivo CSV padronizado no diretório `Download/CEPEC` com codificação UTF-8 e escape seguro de caracteres especiais.
 
