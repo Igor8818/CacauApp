@@ -101,13 +101,13 @@ fun AppCacauCEPEC() {
     var tipoNumVariavel2 by rememberSaveable { mutableStateOf(true) }
     var tipoNumVariavel3 by rememberSaveable { mutableStateOf(true) }
 
-    var valorVariavel1 by rememberSaveable { mutableStateOf("") }
+    var valorVariavel1 by rememberSaveable { mutableStateOf("CCN-51") }
     var valorNumVariavel2 by rememberSaveable { mutableIntStateOf(1) }
     var valorNumVariavel3 by rememberSaveable { mutableIntStateOf(1) }
     var valorTxtVariavel2 by rememberSaveable { mutableStateOf("") }
     var valorTxtVariavel3 by rememberSaveable { mutableStateOf("") }
 
-    val historicoValores1 = remember { mutableStateListOf<String>() }
+    val historicoValores1 = remember { mutableStateListOf("CCN-51", "PS-13.19", "CEPEC-2002", "BN-34") }
 
     var latAtual by remember { mutableDoubleStateOf(0.0) }
     var lngAtual by remember { mutableDoubleStateOf(0.0) }
@@ -312,23 +312,27 @@ fun AppCacauCEPEC() {
         }
 
         else -> {
+            var modoImersivoAtivo by remember { mutableStateOf(false) }
+
             Scaffold(
                 bottomBar = {
-                    NavigationBar(containerColor = Color.White) {
-                        NavigationBarItem(selected = abaSelecionada == 0, onClick = { abaSelecionada = 0 }, icon = { Icon(Icons.Default.PhotoCamera, null) }, label = { Text("Coleta Livre") })
-                        NavigationBarItem(selected = abaSelecionada == 1, onClick = { abaSelecionada = 1 }, icon = { Icon(Icons.Default.Route, null) }, label = { Text("Modo Rota") })
-                        NavigationBarItem(selected = abaSelecionada == 2, onClick = { abaSelecionada = 2 }, icon = { Icon(Icons.Default.Collections, null) }, label = { Text("Galeria") })
-                        NavigationBarItem(
-                            selected = false,
-                            onClick = { mostrarTelaModelo = true },
-                            icon = { Icon(Icons.Default.SmartToy, null) },
-                            label = { Text("Modelo IA") }
-                        )
-                        NavigationBarItem(selected = false, onClick = { configConcluida = false }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Ensaio") })
+                    if (!modoImersivoAtivo) {
+                        NavigationBar(containerColor = Color.White) {
+                            NavigationBarItem(selected = abaSelecionada == 0, onClick = { abaSelecionada = 0 }, icon = { Icon(Icons.Default.PhotoCamera, null) }, label = { Text("Coleta Livre") })
+                            NavigationBarItem(selected = abaSelecionada == 1, onClick = { abaSelecionada = 1 }, icon = { Icon(Icons.Default.Route, null) }, label = { Text("Modo Rota") })
+                            NavigationBarItem(selected = abaSelecionada == 2, onClick = { abaSelecionada = 2 }, icon = { Icon(Icons.Default.Collections, null) }, label = { Text("Galeria") })
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { mostrarTelaModelo = true },
+                                icon = { Icon(Icons.Default.SmartToy, null) },
+                                label = { Text("Modelo IA") }
+                            )
+                            NavigationBarItem(selected = false, onClick = { configConcluida = false }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Ensaio") })
+                        }
                     }
                 }
             ) { padding ->
-                Box(Modifier.padding(padding)) {
+                Box(Modifier.padding(if (modoImersivoAtivo) PaddingValues(0.dp) else padding)) {
                     val pExibicao = if (tipoNumVariavel2) valorNumVariavel2.toString() else valorTxtVariavel2
                     val plExibicao = if (tipoNumVariavel3) valorNumVariavel3.toString() else valorTxtVariavel3
 
@@ -348,6 +352,7 @@ fun AppCacauCEPEC() {
                             plantaNum = valorNumVariavel3, onPlantaNumChange = { valorNumVariavel3 = it },
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { valorTxtVariavel3 = it },
                             modelConfig = modelConfig,
+                            onModoImersivoChange = { modoImersivoAtivo = it },
                             onSave = { uri, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
                                 val idCompleto = "${valorVariavel1}_${labelVariavel2}${pExibicao}_${labelVariavel3}${plExibicao}"
@@ -383,6 +388,7 @@ fun AppCacauCEPEC() {
                             modelConfig = modelConfig,
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = { rotaPreCarregada.clear() },
+                            onModoImersivoChange = { modoImersivoAtivo = it },
                             onSaveColetaRota = { uri, ponto, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
                                 val idCompleto = "${ponto.clone}_P${ponto.parcela}_Pl${ponto.planta}"
@@ -494,6 +500,7 @@ fun TelaPrincipalCapturaOtimizada(
     plantaNum: Int, onPlantaNumChange: (Int) -> Unit,
     plantaTxt: String, onPlantaTxtChange: (String) -> Unit,
     modelConfig: ModelConfig,
+    onModoImersivoChange: (Boolean) -> Unit = {},
     onSave: (Uri, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
@@ -511,6 +518,13 @@ fun TelaPrincipalCapturaOtimizada(
     var ultimoResultadoValido by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
     var ultimoTimestampValidoMs by remember { mutableLongStateOf(0L) }
 
+    LaunchedEffect(cameraAtiva, fotoParaRevisao) {
+        onModoImersivoChange(cameraAtiva || fotoParaRevisao != null)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onModoImersivoChange(false) }
+    }
+
     val imageCapture = remember {
         ImageCapture.Builder()
             .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
@@ -523,7 +537,7 @@ fun TelaPrincipalCapturaOtimizada(
             if (arqLocal != null) {
                 val pVal = if (isNum2) "$parcelaNum" else parcelaTxt
                 val plVal = if (isNum3) "$plantaNum" else plantaTxt
-                idParaRevisao = "${cloneVal}_P${pVal}_Pl${plVal}"
+                idParaRevisao = "${cloneVal}_${label2}${pVal}_${label3}${plVal}"
                 fotoParaRevisao = Uri.fromFile(arqLocal)
                 caixasCapturadas = emptyList()
                 bitmapWidthCapturado = 1f
@@ -724,7 +738,8 @@ fun TelaPrincipalCapturaOtimizada(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Topo compacto elevado para a barra de status
+            // Topo compacto elevado para a barra de status (idêntico ao Modo Rota)
+            val plExHud = if (isNum3) plantaNum.toString() else plantaTxt
             Surface(
                 Modifier
                     .statusBarsPadding()
@@ -737,9 +752,9 @@ fun TelaPrincipalCapturaOtimizada(
                     Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Detectados: $contagemFrutos", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("$cloneVal | Pl $plExHud", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(Modifier.width(8.dp))
-                    Text("• ${modelConfig.nomeExibicao}", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                    Text("• Detectados: $contagemFrutos", color = Color(0xFF00E676), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
 
@@ -832,6 +847,7 @@ fun TelaModoFieldBook(
     modelConfig: ModelConfig,
     onCarregarPlanilhaClick: () -> Unit,
     onLimparRotaClick: () -> Unit,
+    onModoImersivoChange: (Boolean) -> Unit = {},
     onSaveColetaRota: (Uri, RotaColeta, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
@@ -849,6 +865,13 @@ fun TelaModoFieldBook(
 
     var ultimoResultadoValido by remember { mutableStateOf<ObjectDetectorHelper.ResultadoDeteccao?>(null) }
     var ultimoTimestampValidoMs by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(cameraAtiva, fotoParaRevisao) {
+        onModoImersivoChange(cameraAtiva || fotoParaRevisao != null)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onModoImersivoChange(false) }
+    }
 
     val imageCapture = remember {
         ImageCapture.Builder()

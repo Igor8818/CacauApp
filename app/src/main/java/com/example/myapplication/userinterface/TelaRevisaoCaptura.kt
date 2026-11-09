@@ -291,6 +291,7 @@ fun TelaRevisaoCaptura(
 
     var indiceSelecionado by remember { mutableIntStateOf(-1) }
     var plantaNaoColetavel by remember { mutableStateOf(false) }
+    var analisandoFotoEstatica by remember { mutableStateOf(caixasAuditadasIniciais == null && detectorHelper != null) }
     val caixasExcluidasManualmente = remember(fotoUri) { mutableListOf<CaixaAuditavel>() }
 
     // Proporção real da imagem considerando rotação EXIF
@@ -318,54 +319,69 @@ fun TelaRevisaoCaptura(
 
     // Re-inferência em background na foto estática capturada com Coordinate Snapping:
     // Faz o alinhamento exato (snap) dos quadradinhos sobre os frutos da foto estática,
-    // eliminando o atraso de movimento da mão ao disparar o obturador da câmera.
+    // eliminando o atraso de movimento da mão ao disparar o obturador da câmera (e detecta fotos da Galeria).
     LaunchedEffect(fotoUri) {
-        val helper = detectorHelper ?: return@LaunchedEffect
+        if (caixasAuditadasIniciais != null) {
+            analisandoFotoEstatica = false
+            return@LaunchedEffect
+        }
+        val helper = detectorHelper ?: run {
+            analisandoFotoEstatica = false
+            return@LaunchedEffect
+        }
+        analisandoFotoEstatica = true
         withContext(Dispatchers.IO) {
-            val bmp = carregarBitmapFoto(context, fotoUri, maxDim = 1280) ?: return@withContext
+            val bmp = carregarBitmapFoto(context, fotoUri, maxDim = 1280)
+            if (bmp == null) {
+                withContext(Dispatchers.Main) { analisandoFotoEstatica = false }
+                return@withContext
+            }
             try {
-                val res = helper.detectarSincrono(bmp) ?: return@withContext
-                val bmpW = bmp.width.toFloat()
-                val bmpH = bmp.height.toFloat()
+                val res = helper.detectarSincrono(bmp)
+                if (res != null) {
+                    val bmpW = bmp.width.toFloat()
+                    val bmpH = bmp.height.toFloat()
 
-                val candidatasEstaticas = mutableListOf<DetEstilizada>()
-                res.deteccoes.forEach { det ->
-                    val cat = det.categories.firstOrNull()
-                    val label = (cat?.label ?: "cacau").lowercase()
-                    val labelValido = labelsFiltro.isEmpty() ||
-                            labelsFiltro.any { f -> label.contains(f.lowercase()) } ||
-                            label == "cacau" || label == "fruto"
-                    if (!labelValido) return@forEach
+                    val candidatasEstaticas = mutableListOf<DetEstilizada>()
+                    res.deteccoes.forEach { det ->
+                        val cat = det.categories.firstOrNull()
+                        val label = (cat?.label ?: "cacau").lowercase()
+                        val labelValido = labelsFiltro.isEmpty() ||
+                                labelsFiltro.any { f -> label.contains(f.lowercase()) } ||
+                                label == "cacau" || label == "fruto"
+                        if (!labelValido) return@forEach
 
-                    val r = det.boundingBox
-                    val nL = (r.left / bmpW).coerceIn(0f, 1f)
-                    val nT = (r.top / bmpH).coerceIn(0f, 1f)
-                    val nR = (r.right / bmpW).coerceIn(0f, 1f)
-                    val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
+                        val r = det.boundingBox
+                        val nL = (r.left / bmpW).coerceIn(0f, 1f)
+                        val nT = (r.top / bmpH).coerceIn(0f, 1f)
+                        val nR = (r.right / bmpW).coerceIn(0f, 1f)
+                        val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
 
-                    candidatasEstaticas.add(
-                        DetEstilizada(
-                            normLeft = nL,
-                            normTop = nT,
-                            normRight = nR,
-                            normBottom = nB,
-                            confianca = cat?.score ?: 0.85f,
-                            estado = EstadoFruto.SADIO
+                        candidatasEstaticas.add(
+                            DetEstilizada(
+                                normLeft = nL,
+                                normTop = nT,
+                                normRight = nR,
+                                normBottom = nB,
+                                confianca = cat?.score ?: 0.85f,
+                                estado = EstadoFruto.SADIO
+                            )
                         )
-                    )
-                }
+                    }
 
-                withContext(Dispatchers.Main) {
-                    val fundidas = fundirDeteccoesComSnapping(
-                        caixasAtuais = caixas.toList(),
-                        deteccoesEstaticas = candidatasEstaticas,
-                        caixasExcluidas = caixasExcluidasManualmente.toList()
-                    )
-                    caixas.clear()
-                    caixas.addAll(fundidas)
+                    withContext(Dispatchers.Main) {
+                        val fundidas = fundirDeteccoesComSnapping(
+                            caixasAtuais = caixas.toList(),
+                            deteccoesEstaticas = candidatasEstaticas,
+                            caixasExcluidas = caixasExcluidasManualmente.toList()
+                        )
+                        caixas.clear()
+                        caixas.addAll(fundidas)
+                    }
                 }
             } finally {
                 bmp.recycle()
+                withContext(Dispatchers.Main) { analisandoFotoEstatica = false }
             }
         }
     }
@@ -541,15 +557,23 @@ fun TelaRevisaoCaptura(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(plantId, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Toque no fruto p/ classificar ou no fundo p/ +", color = Color(0xFFB0BEC5), fontSize = 10.sp)
+                    Text("Toque na caixa p/ editar/excluir ou no fundo p/ +", color = Color(0xFFB0BEC5), fontSize = 10.sp)
                 }
 
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = if (plantaNaoColetavel) Color(0xFFC62828) else Color(0xFF2E7D32)
+                    color = when {
+                        plantaNaoColetavel -> Color(0xFFC62828)
+                        analisandoFotoEstatica -> Color(0xFF1565C0)
+                        else -> Color(0xFF2E7D32)
+                    }
                 ) {
                     Text(
-                        if (plantaNaoColetavel) "NÃO COLETÁVEL" else "$totalFrutos Frutos",
+                        when {
+                            plantaNaoColetavel -> "NÃO COLETÁVEL"
+                            analisandoFotoEstatica -> "⏳ Analisando IA..."
+                            else -> "$totalFrutos Frutos"
+                        },
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,
@@ -559,250 +583,258 @@ fun TelaRevisaoCaptura(
             }
         }
 
-        // Painel Flutuante quando uma caixa de fruto está selecionada (acoplado acima da barra inferior)
-        if (indiceSelecionado in caixas.indices && !plantaNaoColetavel) {
-            val caixaAtual = caixas[indiceSelecionado]
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 98.dp, start = 8.dp, end = 8.dp)
-                    .fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.98f)),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF424242))
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "Fruto #${indiceSelecionado + 1}${if (caixaAtual.manual) " (Manual)" else ""} • Classifique:",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // Diminuir tamanho do quadradinho
-                            IconButton(
-                                onClick = {
-                                    caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 0.85f)
-                                },
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
-                            ) {
-                                Text("-", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            }
-                            // Aumentar tamanho do quadradinho
-                            IconButton(
-                                onClick = {
-                                    caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 1.18f)
-                                },
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
-                            ) {
-                                Text("+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            }
-                            Spacer(Modifier.width(4.dp))
-                            IconButton(
-                                onClick = { indiceSelecionado = -1 },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.Close, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-
-                    // Botões de Classificação do Fruto
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        // Sadio
-                        Button(
-                            onClick = {
-                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.SADIO)
-                                indiceSelecionado = -1
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.SADIO) Color(0xFF00E676) else Color(0xFF2C2C2C)
-                            ),
-                            modifier = Modifier.weight(1f).height(38.dp),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Sadio", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.SADIO) Color.Black else Color.White, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Vassoura
-                        Button(
-                            onClick = {
-                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.VASSOURA)
-                                indiceSelecionado = -1
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color(0xFFFF9100) else Color(0xFF2C2C2C)
-                            ),
-                            modifier = Modifier.weight(1f).height(38.dp),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Vassoura", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color.Black else Color.White, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Podridão
-                        Button(
-                            onClick = {
-                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.PODRIDAO)
-                                indiceSelecionado = -1
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.PODRIDAO) Color(0xFFFF1744) else Color(0xFF2C2C2C)
-                            ),
-                            modifier = Modifier.weight(1f).height(38.dp),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Podridão", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Não Avaliável
-                        Button(
-                            onClick = {
-                                caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.NAO_AVALIAVEL)
-                                indiceSelecionado = -1
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (caixaAtual.estado == EstadoFruto.NAO_AVALIAVEL) Color(0xFF90A4AE) else Color(0xFF2C2C2C)
-                            ),
-                            modifier = Modifier.weight(1f).height(38.dp),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("N. Aval.", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Excluir caixa
-                        IconButton(
-                            onClick = {
-                                caixasExcluidasManualmente.add(caixaAtual)
-                                caixas.removeAt(indiceSelecionado)
-                                indiceSelecionado = -1
-                            },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(Color(0xFFB71C1C).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
-                        ) {
-                            Icon(Icons.Default.Delete, null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-            }
-        }
-
-        // Painel Inferior: Resumo das Classes e Ações compactado e rebaixado
-        Surface(
+        // Coluna inferior unificada: garante que o card de edição/exclusão do fruto selecionado
+        // fique SEMPRE acima do painel de resumo, sem nunca ter seus botões cobertos!
+        Column(
             modifier = Modifier
                 .navigationBarsPadding()
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp),
-            color = Color(0xFF181818).copy(alpha = 0.96f),
-            shape = RoundedCornerShape(16.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333333))
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            // Painel Flutuante quando uma caixa de fruto está selecionada
+            if (indiceSelecionado in caixas.indices && !plantaNaoColetavel) {
+                val caixaAtual = caixas[indiceSelecionado]
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.98f)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E676).copy(alpha = 0.7f))
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Fruto #${indiceSelecionado + 1}${if (caixaAtual.manual) " (Manual)" else ""}",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                // Diminuir tamanho do quadradinho
+                                IconButton(
+                                    onClick = {
+                                        caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 0.85f)
+                                    },
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .background(Color(0xFF333333), RoundedCornerShape(6.dp))
+                                ) {
+                                    Text("−", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                }
+                                // Aumentar tamanho do quadradinho
+                                IconButton(
+                                    onClick = {
+                                        caixas[indiceSelecionado] = redimensionarCaixaAuditavel(caixaAtual, 1.18f)
+                                    },
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .background(Color(0xFF333333), RoundedCornerShape(6.dp))
+                                ) {
+                                    Text("+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                }
+
+                                // Botão explícito EXCLUIR CAIXA logo ao lado do +/- (para remover cliques por engano ou falsos positivos)
+                                Button(
+                                    onClick = {
+                                        caixasExcluidasManualmente.add(caixaAtual)
+                                        caixas.removeAt(indiceSelecionado)
+                                        indiceSelecionado = -1
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                                    modifier = Modifier.height(30.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, "Excluir caixa", tint = Color.White, modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Excluir", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+
+                                // Fechar seleção sem excluir
+                                IconButton(
+                                    onClick = { indiceSelecionado = -1 },
+                                    modifier = Modifier.size(26.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, "Fechar seleção", tint = Color.LightGray, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(6.dp))
+
+                        // Botões de Classificação Fitossanitária do Fruto
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            // Sadio
+                            Button(
+                                onClick = {
+                                    caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.SADIO)
+                                    indiceSelecionado = -1
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (caixaAtual.estado == EstadoFruto.SADIO) Color(0xFF00E676) else Color(0xFF2C2C2C)
+                                ),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Sadio", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.SADIO) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Vassoura
+                            Button(
+                                onClick = {
+                                    caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.VASSOURA)
+                                    indiceSelecionado = -1
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color(0xFFFF9100) else Color(0xFF2C2C2C)
+                                ),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Vassoura", fontSize = 11.sp, color = if (caixaAtual.estado == EstadoFruto.VASSOURA) Color.Black else Color.White, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Podridão
+                            Button(
+                                onClick = {
+                                    caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.PODRIDAO)
+                                    indiceSelecionado = -1
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (caixaAtual.estado == EstadoFruto.PODRIDAO) Color(0xFFFF1744) else Color(0xFF2C2C2C)
+                                ),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Podridão", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Não Avaliável
+                            Button(
+                                onClick = {
+                                    caixas[indiceSelecionado] = caixaAtual.copy(estado = EstadoFruto.NAO_AVALIAVEL)
+                                    indiceSelecionado = -1
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (caixaAtual.estado == EstadoFruto.NAO_AVALIAVEL) Color(0xFF90A4AE) else Color(0xFF2C2C2C)
+                                ),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("N. Aval.", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Painel Inferior: Resumo das Classes e Ações compactado
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF181818).copy(alpha = 0.96f),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF333333))
             ) {
-                // Barra de Chips de Totais por Categoria
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    ChipResumo(rotulo = "Sadios", total = qtdSadios, cor = Color(0xFF00E676))
-                    ChipResumo(rotulo = "Vassoura", total = qtdVassoura, cor = Color(0xFFFF9100))
-                    ChipResumo(rotulo = "Podridão", total = qtdPodridao, cor = Color(0xFFFF1744))
-                    ChipResumo(rotulo = "N.Aval", total = qtdNaoAvaliavel, cor = Color(0xFF90A4AE))
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                // Toggle para marcar planta inteira como Não Coletável
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Checkbox(
-                        checked = plantaNaoColetavel,
-                        onCheckedChange = { plantaNaoColetavel = it },
-                        colors = CheckboxDefaults.colors(checkedColor = Color.Red),
-                        modifier = Modifier.scale(0.85f)
-                    )
-                    Text("Marcar Planta como Não Coletável / Ausente", color = Color.White, fontSize = 11.sp)
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                // Botões de Ação
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Refazer Foto
-                    OutlinedButton(
-                        onClick = onRefazer,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    // Barra de Chips de Totais por Categoria
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("REFAZER", fontSize = 12.sp)
+                        ChipResumo(rotulo = "Sadios", total = qtdSadios, cor = Color(0xFF00E676))
+                        ChipResumo(rotulo = "Vassoura", total = qtdVassoura, cor = Color(0xFFFF9100))
+                        ChipResumo(rotulo = "Podridão", total = qtdPodridao, cor = Color(0xFFFF1744))
+                        ChipResumo(rotulo = "N.Aval", total = qtdNaoAvaliavel, cor = Color(0xFF90A4AE))
                     }
 
-                    // Confirmar e Salvar
-                    Button(
-                        onClick = {
-                            if (plantaNaoColetavel) {
-                                onConfirmar("Não Coletável", 0, 0, 0, 0, 0, emptyList())
-                            } else {
-                                // "Resultado" fica SOMENTE numérico: o CacauSync extrai os dígitos desse campo.
-                                // O detalhamento por classe vai em colunas próprias no fim do CSV.
-                                onConfirmar(
-                                    totalFrutos.toString(),
-                                    totalFrutos,
-                                    qtdSadios,
-                                    qtdVassoura,
-                                    qtdPodridao,
-                                    qtdNaoAvaliavel,
-                                    caixas.toList()
-                                )
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1.3f)
-                            .height(40.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    Spacer(Modifier.height(4.dp))
+
+                    // Toggle para marcar planta inteira como Não Coletável
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (plantaNaoColetavel) "CONFIRMAR AUSENTE" else "SALVAR ($totalFrutos)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Checkbox(
+                            checked = plantaNaoColetavel,
+                            onCheckedChange = { plantaNaoColetavel = it },
+                            colors = CheckboxDefaults.colors(checkedColor = Color.Red),
+                            modifier = Modifier.scale(0.85f)
+                        )
+                        Text("Marcar Planta como Não Coletável / Ausente", color = Color.White, fontSize = 11.sp)
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    // Botões de Ação
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Refazer Foto
+                        OutlinedButton(
+                            onClick = onRefazer,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("REFAZER", fontSize = 12.sp)
+                        }
+
+                        // Confirmar e Salvar
+                        Button(
+                            onClick = {
+                                if (plantaNaoColetavel) {
+                                    onConfirmar("Não Coletável", 0, 0, 0, 0, 0, emptyList())
+                                } else {
+                                    // "Resultado" fica SOMENTE numérico: o CacauSync extrai os dígitos desse campo.
+                                    // O detalhamento por classe vai em colunas próprias no fim do CSV.
+                                    onConfirmar(
+                                        totalFrutos.toString(),
+                                        totalFrutos,
+                                        qtdSadios,
+                                        qtdVassoura,
+                                        qtdPodridao,
+                                        qtdNaoAvaliavel,
+                                        caixas.toList()
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .height(40.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (plantaNaoColetavel) "CONFIRMAR AUSENTE" else "SALVAR ($totalFrutos)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                 }
             }
