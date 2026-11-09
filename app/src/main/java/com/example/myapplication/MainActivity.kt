@@ -107,7 +107,11 @@ fun AppCacauCEPEC() {
     var valorTxtVariavel2 by rememberSaveable { mutableStateOf("") }
     var valorTxtVariavel3 by rememberSaveable { mutableStateOf("") }
 
-    val historicoValores1 = remember { mutableStateListOf("CCN-51", "PS-13.19", "CEPEC-2002", "BN-34") }
+    val historicoValores1 = remember {
+        mutableStateListOf<String>().apply {
+            addAll(com.example.myapplication.data.CLONES_CEPEC_PADRAO)
+        }
+    }
 
     var latAtual by remember { mutableDoubleStateOf(0.0) }
     var lngAtual by remember { mutableDoubleStateOf(0.0) }
@@ -619,17 +623,68 @@ fun TelaPrincipalCapturaOtimizada(
 
             Spacer(Modifier.height(16.dp))
 
-            ExposedDropdownMenuBox(expanded = menuClonesExpandido, onExpandedChange = { menuClonesExpandido = !menuClonesExpandido }) {
+            // Autocompletar / Busca inteligente dos 104 clones do CEPEC
+            val clonesFiltrados = remember(cloneVal, historicoClones.toList()) {
+                val busca = cloneVal.trim()
+                if (busca.isBlank()) {
+                    historicoClones.take(35)
+                } else {
+                    val correspondentes = historicoClones.filter { it.contains(busca, ignoreCase = true) }
+                    if (correspondentes.isNotEmpty()) correspondentes.take(35) else historicoClones.take(35)
+                }
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = menuClonesExpandido,
+                onExpandedChange = { menuClonesExpandido = !menuClonesExpandido }
+            ) {
                 OutlinedTextField(
-                    value = cloneVal, onValueChange = onCloneChange, label = { Text(label1) },
+                    value = cloneVal,
+                    onValueChange = {
+                        onCloneChange(it)
+                        menuClonesExpandido = true
+                    },
+                    label = { Text("$label1 (104 Clones CEPEC)") },
+                    placeholder = { Text("Ex: CCN-51, SCP-17034, PS-13.19...") },
                     modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable, true),
-                    leadingIcon = { Icon(Icons.Default.Settings, null, tint = Color(0xFF2E7D32)) },
+                    leadingIcon = { Icon(Icons.Default.Eco, null, tint = Color(0xFF2E7D32)) },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuClonesExpandido) }
                 )
-                if (historicoClones.isNotEmpty()) {
-                    ExposedDropdownMenu(expanded = menuClonesExpandido, onDismissRequest = { menuClonesExpandido = false }) {
-                        historicoClones.forEach { nome ->
-                            DropdownMenuItem(text = { Text(nome) }, onClick = { onCloneChange(nome); menuClonesExpandido = false })
+                if (clonesFiltrados.isNotEmpty()) {
+                    ExposedDropdownMenu(
+                        expanded = menuClonesExpandido,
+                        onDismissRequest = { menuClonesExpandido = false }
+                    ) {
+                        clonesFiltrados.forEach { nome ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            nome,
+                                            fontWeight = if (nome.equals(cloneVal, ignoreCase = true)) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (nome.startsWith("CCN") || nome.startsWith("PS") || nome.startsWith("CEPEC") ||
+                                            nome.startsWith("BN") || nome.startsWith("CC") || nome.startsWith("ICS")) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Surface(
+                                                color = Color(0xFFE8F5E9),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    "Padrão",
+                                                    fontSize = 10.sp,
+                                                    color = Color(0xFF2E7D32),
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    onCloneChange(nome)
+                                    menuClonesExpandido = false
+                                }
+                            )
                         }
                     }
                 }
