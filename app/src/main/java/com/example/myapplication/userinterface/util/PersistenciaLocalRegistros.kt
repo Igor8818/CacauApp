@@ -7,6 +7,7 @@ import android.util.Log
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
 import com.example.myapplication.data.RegistroCacau
+import com.example.myapplication.data.RotaColeta
 import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.userinterface.EstadoFruto
 import org.json.JSONArray
@@ -298,5 +299,105 @@ object PersistenciaLocalRegistros {
             Log.e("PersistenciaLocal", "Erro ao carregar configuracao do modelo: ${e.message}")
             ModelConfig(modeloSelecionado = MODELOS_EMBUTIDOS.firstOrNull())
         }
+    }
+
+    private const val ROTA_FILE_NAME = "rota_precarregada.json"
+
+    fun obterTimestampRotaPrecarregada(context: Context): Long {
+        return try {
+            val f = File(context.filesDir, ROTA_FILE_NAME)
+            if (f.exists() && f.length() > 2L) f.lastModified() else 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    fun salvarRotaPrecarregada(context: Context, rota: List<RotaColeta>, codigoEnsaio: String = "TC-1801") {
+        val snapshot = rota.toList()
+        synchronized(fileLock) {
+            try {
+                val arr = JSONArray()
+                for ((idx, item) in snapshot.withIndex()) {
+                    arr.put(
+                        JSONObject().apply {
+                            put("ordem", if (item.ordem > 0) item.ordem else (idx + 1))
+                            put("clone", item.clone)
+                            put("parcela", item.parcela)
+                            put("planta", item.planta)
+                            put("coletado", item.coletado)
+                            put("qtdFrutos", item.qtdFrutos)
+                        }
+                    )
+                }
+                val root = JSONObject().apply {
+                    put("codigoEnsaio", codigoEnsaio.ifBlank { "TC-1801" })
+                    put("atualizadoEm", System.currentTimeMillis())
+                    put("itens", arr)
+                }
+                val f = File(context.filesDir, ROTA_FILE_NAME)
+                f.writeText(root.toString(), Charsets.UTF_8)
+            } catch (e: Exception) {
+                Log.e("PersistenciaLocal", "Erro ao salvar rota precarregada: ${e.message}", e)
+            }
+        }
+    }
+
+    fun limparRotaPrecarregada(context: Context) {
+        synchronized(fileLock) {
+            try {
+                val f = File(context.filesDir, ROTA_FILE_NAME)
+                if (f.exists()) f.delete()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun carregarRotaPrecarregada(context: Context): Pair<String, List<RotaColeta>> {
+        synchronized(fileLock) {
+            try {
+                val f = File(context.filesDir, ROTA_FILE_NAME)
+                if (!f.exists() || f.length() == 0L) return "" to emptyList()
+                val texto = f.readText(Charsets.UTF_8).trim()
+                return deserializarRotaDeJson(texto)
+            } catch (e: Exception) {
+                Log.e("PersistenciaLocal", "Erro ao carregar rota precarregada: ${e.message}", e)
+                return "" to emptyList()
+            }
+        }
+    }
+
+    fun deserializarRotaDeJson(jsonTexto: String): Pair<String, List<RotaColeta>> {
+        if (jsonTexto.isBlank()) return "" to emptyList()
+        var codigoEnsaio = ""
+        val arr = if (jsonTexto.startsWith("{")) {
+            val root = JSONObject(jsonTexto)
+            codigoEnsaio = root.optString("codigoEnsaio", "")
+            root.optJSONArray("itens") ?: JSONArray()
+        } else {
+            JSONArray(jsonTexto)
+        }
+
+        val lista = mutableListOf<RotaColeta>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val clone = o.optString("clone", "").trim()
+            val parcela = o.optString("parcela", "1").trim().ifBlank { "1" }
+            val planta = o.optInt("planta", 1).coerceAtLeast(1)
+            val ordem = o.optInt("ordem", i + 1).coerceAtLeast(1)
+            val coletado = o.optBoolean("coletado", false)
+            val qtdFrutos = o.optString("qtdFrutos", "0")
+            if (clone.isNotBlank()) {
+                lista.add(
+                    RotaColeta(
+                        clone = clone,
+                        parcela = parcela,
+                        planta = planta,
+                        coletado = coletado,
+                        qtdFrutos = qtdFrutos,
+                        ordem = ordem
+                    )
+                )
+            }
+        }
+        return codigoEnsaio to lista
     }
 }

@@ -7,6 +7,8 @@ import android.graphics.Matrix
 import android.net.Uri
 import android.media.ExifInterface
 import com.example.myapplication.data.RegistroCacau
+import com.example.myapplication.data.RotaColeta
+import com.example.myapplication.userinterface.util.PersistenciaLocalRegistros
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -178,7 +180,7 @@ object CacauSyncClient {
         val codigoEnsaio = (prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801")
             .ifBlank { "TC-1801" }
 
-        val urlDescoberta = descobrirServidorAutomaticamente(urlSalva, onProgresso)
+        val urlDescoberta = descobrirServidorAutomaticamente(urlSalva) { msg -> onProgresso?.invoke(msg) }
             ?: return Result.failure(
                 Exception(
                     "Servidor CacauSync não encontrado automaticamente.\n\n" +
@@ -217,6 +219,62 @@ object CacauSyncClient {
             onStatusRegistro = onStatusRegistro
         )
         return syncRes.map { it.copy(servidorUtilizado = urlDescoberta) }
+    }
+
+    /**
+     * Puxa a planilha de rota ativa diretamente do PC (CacauSync) em 1 clique via USB ou Wi-Fi,
+     * sem que o trabalhador precise selecionar arquivos CSV nem mapear colunas.
+     */
+    fun puxarRotaAutomatica(
+        context: Context,
+        ensaioPadrao: String = "TC-1801",
+        onProgresso: ((String) -> Unit)? = null
+    ): Result<List<RotaColeta>> {
+        val prefs = context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE)
+        val urlSalva = prefs.getString("server_url", "") ?: ""
+        val emailSalvo = (prefs.getString("user_email", "") ?: "").ifBlank { DEFAULT_EMAIL }
+        val passSalva = (prefs.getString("user_pass", "") ?: "").ifBlank { DEFAULT_PASS }
+        val codigoEnsaio = (prefs.getString("codigo_ensaio", ensaioPadrao) ?: ensaioPadrao)
+            .ifBlank { "TC-1801" }
+
+        val urlDescoberta = descobrirServidorAutomaticamente(urlSalva) { msg -> onProgresso?.invoke(msg) }
+            ?: return Result.failure(
+                Exception("Servidor CacauSync não encontrado no PC. Conecte o cabo USB ou deixe o celular e o PC no mesmo Wi-Fi.")
+            )
+
+        prefs.edit().putString("server_url", urlDescoberta).apply()
+
+        onProgresso?.invoke("Conectado ao PC! Baixando rota de $codigoEnsaio...")
+        var loginRes = login(urlDescoberta, emailSalvo, passSalva)
+        if (loginRes.isFailure) {
+            loginRes = login(urlDescoberta, DEFAULT_EMAIL, DEFAULT_PASS)
+        }
+        val token = loginRes.getOrElse {
+            return Result.failure(Exception("Erro ao autenticar no PC: ${it.message}"))
+        }
+
+        return try {
+            val req = Request.Builder()
+                .url("$urlDescoberta/api/v1/ensaios/$codigoEnsaio/rota-json")
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            client.newCall(req).execute().use { resp ->
+                val bodyStr = resp.body?.string() ?: "[]"
+                if (!resp.isSuccessful) {
+                    return Result.failure(Exception("Erro HTTP ${resp.code} ao puxar rota do PC."))
+                }
+                val (_, lista) = PersistenciaLocalRegistros.deserializarRotaDeJson(bodyStr)
+                if (lista.isEmpty()) {
+                    return Result.failure(Exception("O ensaio $codigoEnsaio ainda não possui plantas cadastradas na rota do PC."))
+                }
+                PersistenciaLocalRegistros.salvarRotaPrecarregada(context, lista, codigoEnsaio)
+                Result.success(lista)
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Falha ao baixar rota do PC: ${e.message}"))
+        }
     }
 
     /**

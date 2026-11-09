@@ -58,6 +58,7 @@ import com.example.myapplication.data.RotaColeta
 import com.example.myapplication.userinterface.TelaConfiguracaoModelo
 import com.example.myapplication.network.CacauSyncClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -155,6 +156,7 @@ fun AppCacauCEPEC() {
                     reconciliarRotaComRegistros(lista, listaRegistros)
                     rotaPreCarregada.clear()
                     rotaPreCarregada.addAll(lista)
+                    PersistenciaLocalRegistros.salvarRotaPrecarregada(context, rotaPreCarregada, ensaioNome)
                     Toast.makeText(context, "${lista.size} plantas carregadas automaticamente!", Toast.LENGTH_SHORT).show()
                 } else {
                     colunasEncontradas.clear()
@@ -179,6 +181,8 @@ fun AppCacauCEPEC() {
         }
     }
 
+    var ultimoTimestampRota by remember { mutableLongStateOf(0L) }
+
     LaunchedEffect(Unit) {
         val salvos = PersistenciaLocalRegistros.carregarRegistros(context)
         if (salvos.isNotEmpty() && listaRegistros.isEmpty()) {
@@ -190,7 +194,39 @@ fun AppCacauCEPEC() {
             // Garante que fotos de sessões anteriores tenham cópia pronta em files/fotos_sync/
             PersistenciaLocalRegistros.salvarRegistros(context, salvos)
         }
+        val (ensaioRota, rotaSalva) = PersistenciaLocalRegistros.carregarRotaPrecarregada(context)
+        if (rotaSalva.isNotEmpty() && rotaPreCarregada.isEmpty()) {
+            reconciliarRotaComRegistros(rotaSalva, listaRegistros)
+            rotaPreCarregada.addAll(rotaSalva)
+            ultimoTimestampRota = PersistenciaLocalRegistros.obterTimestampRotaPrecarregada(context)
+            if (ensaioNome.isBlank() && ensaioRota.isNotBlank()) {
+                ensaioNome = ensaioRota
+            }
+        }
         launcherPermissoes.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
+
+        // Monitora se o pesquisador enviou uma nova planilha de rota pelo cabo USB (1 clique no PC)
+        while (true) {
+            delay(2000L)
+            val tsAtual = PersistenciaLocalRegistros.obterTimestampRotaPrecarregada(context)
+            if (tsAtual > 0L && tsAtual != ultimoTimestampRota) {
+                val (novoEnsaio, novaRota) = PersistenciaLocalRegistros.carregarRotaPrecarregada(context)
+                if (novaRota.isNotEmpty()) {
+                    reconciliarRotaComRegistros(novaRota, listaRegistros)
+                    rotaPreCarregada.clear()
+                    rotaPreCarregada.addAll(novaRota)
+                    ultimoTimestampRota = tsAtual
+                    if (ensaioNome.isBlank() && novoEnsaio.isNotBlank()) {
+                        ensaioNome = novoEnsaio
+                    }
+                    Toast.makeText(
+                        context,
+                        "📋 Planilha de rota recebida do PC (${novaRota.size} plantas)!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
     }
 
     // ── ROTEAMENTO DE TELAS ──
@@ -391,7 +427,17 @@ fun AppCacauCEPEC() {
                             rotaCompleta = rotaPreCarregada,
                             modelConfig = modelConfig,
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
-                            onLimparRotaClick = { rotaPreCarregada.clear() },
+                            onLimparRotaClick = {
+                                rotaPreCarregada.clear()
+                                PersistenciaLocalRegistros.limparRotaPrecarregada(context)
+                                ultimoTimestampRota = 0L
+                            },
+                            onRotaRecebidaDoPc = { novaRota ->
+                                reconciliarRotaComRegistros(novaRota, listaRegistros)
+                                rotaPreCarregada.clear()
+                                rotaPreCarregada.addAll(novaRota)
+                                ultimoTimestampRota = PersistenciaLocalRegistros.obterTimestampRotaPrecarregada(context)
+                            },
                             onModoImersivoChange = { modoImersivoAtivo = it },
                             onSaveColetaRota = { uri, ponto, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
@@ -417,6 +463,8 @@ fun AppCacauCEPEC() {
                                     )
                                 )
                                 PersistenciaLocalRegistros.salvarRegistros(context, listaRegistros)
+                                PersistenciaLocalRegistros.salvarRotaPrecarregada(context, rotaPreCarregada, ensaioNome)
+                                ultimoTimestampRota = PersistenciaLocalRegistros.obterTimestampRotaPrecarregada(context)
                             }
                         )
                         2 -> TelaGaleria(
@@ -473,6 +521,8 @@ fun AppCacauCEPEC() {
                         reconciliarRotaComRegistros(lista, listaRegistros)
                         rotaPreCarregada.clear()
                         rotaPreCarregada.addAll(lista)
+                        PersistenciaLocalRegistros.salvarRotaPrecarregada(context, rotaPreCarregada, ensaioNome)
+                        ultimoTimestampRota = PersistenciaLocalRegistros.obterTimestampRotaPrecarregada(context)
                         mostrarDialogMapeamento = false
                         uriArquivoPendente = null
                         Toast.makeText(context, "${lista.size} plantas vinculadas!", Toast.LENGTH_SHORT).show()
@@ -902,10 +952,42 @@ fun TelaModoFieldBook(
     modelConfig: ModelConfig,
     onCarregarPlanilhaClick: () -> Unit,
     onLimparRotaClick: () -> Unit,
+    onRotaRecebidaDoPc: (List<RotaColeta>) -> Unit = {},
     onModoImersivoChange: (Boolean) -> Unit = {},
     onSaveColetaRota: (Uri, RotaColeta, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var puxandoRotaPc by remember { mutableStateOf(false) }
+    var statusPuxarRota by remember { mutableStateOf("") }
+
+    fun dispararPuxarRotaPc() {
+        if (puxandoRotaPc) return
+        puxandoRotaPc = true
+        statusPuxarRota = "Procurando PC (USB / Wi-Fi)..."
+        coroutineScope.launch(Dispatchers.IO) {
+            val res = CacauSyncClient.puxarRotaAutomatica(
+                context = context,
+                ensaioPadrao = ensaio.ifBlank { "TC-1801" },
+                onProgresso = { msg ->
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        statusPuxarRota = msg
+                    }
+                }
+            )
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                puxandoRotaPc = false
+                if (res.isSuccess) {
+                    val lista = res.getOrThrow()
+                    onRotaRecebidaDoPc(lista)
+                    Toast.makeText(context, "📋 Planilha com ${lista.size} plantas puxada do PC!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, res.exceptionOrNull()?.message ?: "Erro ao puxar rota do PC.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     val primeiroNaoColetado = remember(rotaCompleta) {
         val idx = rotaCompleta.indexOfFirst { !it.coletado }
         if (idx >= 0) idx else 0
@@ -971,18 +1053,47 @@ fun TelaModoFieldBook(
 
     if (rotaCompleta.isEmpty()) {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.FolderOpen, null, modifier = Modifier.size(64.dp), tint = Color.Gray)
+            Icon(Icons.Default.Route, null, modifier = Modifier.size(64.dp), tint = Color(0xFF2E7D32))
             Spacer(Modifier.height(16.dp))
-            Text("Nenhuma rota carregada", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text("Selecione o arquivo de planejamento (CSV) para iniciar o monitoramento sequencial.", color = Color.Gray, modifier = Modifier.padding(16.dp))
-            Spacer(Modifier.height(16.dp))
-            Button(onClick = onCarregarPlanilhaClick, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
-                Text("SELECIONAR PLANILHA DE COLETA")
+            Text("Nenhuma planilha de rota ativa", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text(
+                "O pesquisador pode enviar a planilha pelo PC (USB) ou você pode puxar em 1 clique abaixo:",
+                color = Color.Gray,
+                modifier = Modifier.padding(16.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { dispararPuxarRotaPc() },
+                enabled = !puxandoRotaPc,
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (puxandoRotaPc) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(statusPuxarRota, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                } else {
+                    Icon(Icons.Default.CloudDownload, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("PUXAR PLANILHA DO PC (1 CLIQUE)", fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onCarregarPlanilhaClick,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text("ESCOLHER ARQUIVO CSV NO CELULAR")
             }
         }
     } else {
         val pontoAtual = rotaCompleta[indiceAtual]
         val isPontoValido = pontoAtual.clone.isNotBlank()
+        val ordemExibicao = if (pontoAtual.ordem > 0) pontoAtual.ordem else (indiceAtual + 1)
 
         if (fotoParaRevisao != null) {
             val idPonto = "${pontoAtual.clone}_P${pontoAtual.parcela}_Pl${pontoAtual.planta}"
@@ -995,9 +1106,9 @@ fun TelaModoFieldBook(
                 detectorHelper = detectorHelper,
                 labelsFiltro = modelConfig.labelsFiltro,
                 onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
-                    onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                     pontoAtual.coletado = true
                     pontoAtual.qtdFrutos = diag
+                    onSaveColetaRota(fotoParaRevisao!!, pontoAtual, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
                     fotoParaRevisao = null
                     cameraAtiva = false
                     if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ else Toast.makeText(context, "Rota Finalizada!", Toast.LENGTH_SHORT).show()
@@ -1010,8 +1121,17 @@ fun TelaModoFieldBook(
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Sessão em Rota: $ensaio", fontWeight = FontWeight.Bold, color = Color(0xFF1B5E20))
-                    TextButton(onClick = { onLimparRotaClick(); indiceAtual = 0 }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)) {
-                        Icon(Icons.Default.DeleteSweep, null); Spacer(Modifier.width(4.dp)); Text("Trocar Planilha")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { dispararPuxarRotaPc() }, enabled = !puxandoRotaPc) {
+                            Icon(Icons.Default.Sync, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (puxandoRotaPc) "Puxando..." else "Atualizar do PC", fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { onLimparRotaClick(); indiceAtual = 0 }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)) {
+                            Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(2.dp))
+                            Text("Limpar", fontSize = 12.sp)
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1026,13 +1146,17 @@ fun TelaModoFieldBook(
                 }
 
                 Spacer(Modifier.height(12.dp))
-                Text("Progresso: ${indiceAtual + 1} de ${rotaCompleta.size}", fontSize = 14.sp)
+                Text("Ordem na Planilha: #$ordemExibicao  •  Planta ${indiceAtual + 1} de ${rotaCompleta.size}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 LinearProgressIndicator(progress = { (indiceAtual + 1).toFloat() / rotaCompleta.size.toFloat() }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)), color = Color(0xFF2E7D32))
                 Spacer(Modifier.height(24.dp))
 
                 Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (pontoAtual.coletado) Color(0xFFE8F5E9) else Color(0xFFFFF3E0))) {
                     Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(if (pontoAtual.coletado) "PLANTA CONCLUÍDA (EDITÁVEL)" else "PRÓXIMA PLANTA DA ROTA", fontWeight = FontWeight.Bold, color = if (pontoAtual.coletado) Color(0xFF2E7D32) else Color(0xFFE65100))
+                        Text(
+                            if (pontoAtual.coletado) "PLANTA #$ordemExibicao CONCLUÍDA (EDITÁVEL)" else "PLANTA #$ordemExibicao DA PLANILHA",
+                            fontWeight = FontWeight.Bold,
+                            color = if (pontoAtual.coletado) Color(0xFF2E7D32) else Color(0xFFE65100)
+                        )
                         Spacer(Modifier.height(16.dp))
                         Text("CLONE / VARIEDADE", fontSize = 12.sp, color = Color.Gray)
                         Text(if (isPontoValido) pontoAtual.clone else "[IDENTIFICADOR VAZIO]", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = if (isPontoValido) Color.Black else Color.Red)
@@ -1047,7 +1171,7 @@ fun TelaModoFieldBook(
 
                 Spacer(Modifier.weight(1f))
 
-                OutlinedButton(onClick = { onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável", 0, 0, 0, 0, 0, emptyList()); pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
+                OutlinedButton(onClick = { pontoAtual.coletado = true; pontoAtual.qtdFrutos = "Não Coletável"; onSaveColetaRota(Uri.EMPTY, pontoAtual, "Não Coletável", 0, 0, 0, 0, 0, emptyList()); if (indiceAtual < rotaCompleta.size - 1) indiceAtual++ }, enabled = isPontoValido, modifier = Modifier.fillMaxWidth().height(48.dp).padding(bottom = 8.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Red), shape = RoundedCornerShape(12.dp)) {
                     Icon(Icons.Default.ReportProblem, null); Spacer(Modifier.width(8.dp)); Text("PLANTA MORTA / SECA / AUSENTE")
                 }
 
