@@ -42,6 +42,29 @@ object PersistenciaLocalRegistros {
                 }
             }
         }
+
+        // Mantém espelho JPEG otimizado em files/fotos_sync/<plantId>.jpg para extração via cabo USB em 1 clique
+        try {
+            if (context.contentResolver != null) {
+                Thread {
+                    try {
+                        val dirFotos = File(context.filesDir, "fotos_sync")
+                        if (!dirFotos.exists()) dirFotos.mkdirs()
+                        for (reg in snapshot) {
+                            if (reg.plantId.isBlank() || reg.uri == Uri.EMPTY) continue
+                            val safeName = reg.plantId.replace(Regex("[^a-zA-Z0-9._-]"), "_") + ".jpg"
+                            val arqFoto = File(dirFotos, safeName)
+                            if (!arqFoto.exists() || arqFoto.length() == 0L) {
+                                val bytes = com.example.myapplication.network.CacauSyncClient.prepararFotoBytes(context, reg.uri)
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    arqFoto.writeBytes(bytes)
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }.start()
+            }
+        } catch (_: Throwable) {}
     }
 
     fun carregarRegistros(context: Context): List<RegistroCacau> {

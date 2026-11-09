@@ -28,6 +28,16 @@ object CacauSyncClient {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val fastDiscoveryClient = OkHttpClient.Builder()
+        .connectTimeout(380, TimeUnit.MILLISECONDS)
+        .readTimeout(450, TimeUnit.MILLISECONDS)
+        .callTimeout(600, TimeUnit.MILLISECONDS)
+        .build()
+
+    const val DEFAULT_EMAIL = "coordenador@cepec.gov.br"
+    const val DEFAULT_PASS = "cepec123"
+    const val DEFAULT_SERVER_URL = "http://192.168.15.4:8080"
+
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     private val JPEG_MEDIA_TYPE = "image/jpeg".toMediaType()
 
@@ -38,8 +48,176 @@ object CacauSyncClient {
         val novasInseridas: Int,
         val duplicadasIgnoradas: Int,
         val fotosEnviadas: Int,
-        val mensagens: List<String>
+        val mensagens: List<String>,
+        val servidorUtilizado: String = ""
     )
+
+    /**
+     * Testa rapidamente se uma URL responde como um servidor CacauSync ativo.
+     */
+    fun testarServidorAtivo(candidateUrl: String): Boolean {
+        val baseUrl = normalizarUrl(candidateUrl)
+        val req = Request.Builder()
+            .url("$baseUrl/v3/api-docs")
+            .get()
+            .build()
+        return try {
+            fastDiscoveryClient.newCall(req).execute().use { resp ->
+                resp.isSuccessful
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Descobre automaticamente o computador onde o CacauSync está rodando:
+     * 1. Testa túnel USB direto (127.0.0.1:8080 via adb reverse)
+     * 2. Testa a última URL salva e o IP padrão da estação local (192.168.15.4:8080)
+     * 3. Varre automaticamente em paralelo a sub-rede Wi-Fi local (/24) na porta 8080
+     */
+    fun descobrirServidorAutomaticamente(
+        urlSalva: String = "",
+        onProgresso: (String) -> Unit = {}
+    ): String? {
+        onProgresso("Procurando PC (USB / Wi-Fi)...")
+
+        val candidatosPrioritarios = mutableListOf(
+            "http://127.0.0.1:8080",
+            DEFAULT_SERVER_URL,
+            "http://10.0.2.2:8080"
+        )
+        if (urlSalva.isNotBlank()) {
+            candidatosPrioritarios.add(0, normalizarUrl(urlSalva))
+        }
+
+        for (cand in candidatosPrioritarios.distinct()) {
+            if (testarServidorAtivo(cand)) {
+                return normalizarUrl(cand)
+            }
+        }
+
+        // Varredura rápida da sub-rede local Wi-Fi (ex: 192.168.x.1..254)
+        val prefixosRede = obterPrefixosSubredeLocal()
+        if (prefixosRede.isNotEmpty()) {
+            onProgresso("Buscando PC na rede Wi-Fi (${prefixosRede.first()}.x)...")
+            val encontrado = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(32)
+            try {
+                val futures = mutableListOf<java.util.concurrent.Future<*>>()
+                for (prefixo in prefixosRede) {
+                    for (host in 1..254) {
+                        val candidate = "http://$prefixo.$host:8080"
+                        futures.add(
+                            pool.submit {
+                                if (encontrado.get() == null && testarServidorAtivo(candidate)) {
+                                    encontrado.compareAndSet(null, candidate)
+                                }
+                            }
+                        )
+                    }
+                }
+                for (f in futures) {
+                    if (encontrado.get() != null) break
+                    try {
+                        f.get(5, TimeUnit.SECONDS)
+                    } catch (_: Exception) {}
+                }
+            } finally {
+                pool.shutdownNow()
+            }
+            encontrado.get()?.let { return it }
+        }
+
+        return null
+    }
+
+    private fun obterPrefixosSubredeLocal(): List<String> {
+        val prefixos = mutableListOf<String>()
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return emptyList()
+            for (nif in java.util.Collections.list(interfaces)) {
+                if (!nif.isUp || nif.isLoopback) continue
+                for (addr in java.util.Collections.list(nif.inetAddresses)) {
+                    if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
+                        val ip = addr.hostAddress ?: continue
+                        val partes = ip.split(".")
+                        if (partes.size == 4) {
+                            val prefixo = "${partes[0]}.${partes[1]}.${partes[2]}"
+                            if (!prefixos.contains(prefixo)) {
+                                prefixos.add(prefixo)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return prefixos
+    }
+
+    /**
+     * Sincronização em 1 Clique (Zero-Config):
+     * Descobre o servidor PC automaticamente (via cabo USB ou Wi-Fi), autentica com
+     * as credenciais padrão do laboratório e envia todas as coletas + caixas YOLO + fotos.
+     */
+    fun sincronizarAutomatico(
+        context: Context,
+        ensaioPadrao: String,
+        registros: List<RegistroCacau>,
+        onProgresso: (status: String) -> Unit,
+        onStatusRegistro: ((plantId: String, status: String) -> Unit)? = null
+    ): Result<SyncResultado> {
+        if (registros.isEmpty()) {
+            return Result.failure(Exception("Nenhum registro para sincronizar."))
+        }
+
+        val prefs = context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE)
+        val urlSalva = prefs.getString("server_url", "") ?: ""
+        val emailSalvo = (prefs.getString("user_email", "") ?: "").ifBlank { DEFAULT_EMAIL }
+        val passSalva = (prefs.getString("user_pass", "") ?: "").ifBlank { DEFAULT_PASS }
+        val codigoEnsaio = (prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801")
+            .ifBlank { "TC-1801" }
+
+        val urlDescoberta = descobrirServidorAutomaticamente(urlSalva, onProgresso)
+            ?: return Result.failure(
+                Exception(
+                    "Servidor CacauSync não encontrado automaticamente.\n\n" +
+                    "• Verifique se o CacauSync está aberto no PC\n" +
+                    "• Conecte o cabo USB ou deixe o celular e o PC no mesmo Wi-Fi"
+                )
+            )
+
+        // Salva a URL descoberta para que o próximo envio seja instantâneo
+        prefs.edit()
+            .putString("server_url", urlDescoberta)
+            .putString("user_email", emailSalvo)
+            .putString("user_pass", passSalva)
+            .putString("codigo_ensaio", codigoEnsaio)
+            .apply()
+
+        onProgresso("Conectado a $urlDescoberta! Autenticando...")
+        var loginRes = login(urlDescoberta, emailSalvo, passSalva)
+        if (loginRes.isFailure && (emailSalvo != DEFAULT_EMAIL || passSalva != DEFAULT_PASS)) {
+            loginRes = login(urlDescoberta, DEFAULT_EMAIL, DEFAULT_PASS)
+        }
+        if (loginRes.isFailure) {
+            return Result.failure(
+                Exception("Servidor encontrado em $urlDescoberta, mas falhou ao autenticar: ${loginRes.exceptionOrNull()?.message}")
+            )
+        }
+
+        val token = loginRes.getOrThrow()
+        val syncRes = sincronizar(
+            context = context,
+            serverUrl = urlDescoberta,
+            token = token,
+            codigoEnsaio = codigoEnsaio,
+            registros = registros,
+            onProgresso = onProgresso,
+            onStatusRegistro = onStatusRegistro
+        )
+        return syncRes.map { it.copy(servidorUtilizado = urlDescoberta) }
+    }
 
     /**
      * Autentica pesquisador e obtém o Token Bearer JWT.
@@ -296,21 +474,16 @@ object CacauSyncClient {
      * Lê a foto, corrige orientação EXIF (para casar com as caixas do YOLO)
      * e redimensiona com inSampleSize seguro (evita OutOfMemory em celulares com pouca RAM).
      */
-    private fun prepararFotoBytes(context: Context, uri: Uri): ByteArray? {
+    fun prepararFotoBytes(context: Context, uri: Uri): ByteArray? {
         return try {
             // 1. Orientação EXIF da foto capturada
-            val rotationDegrees = try {
+            val orientation = try {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val exif = ExifInterface(stream)
-                    when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                        ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                        ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                        else -> 0
-                    }
-                } ?: 0
+                    exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                } ?: ExifInterface.ORIENTATION_NORMAL
             } catch (e: Exception) {
-                0
+                ExifInterface.ORIENTATION_NORMAL
             }
 
             // 2. Leitura segura de dimensões
@@ -336,9 +509,27 @@ object CacauSyncClient {
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
             } ?: return null
 
-            // 4. Aplica rotação para ficar de pé (alinhada às caixas)
-            val rotatedBitmap = if (rotationDegrees != 0) {
-                val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            // 4. Aplica matriz EXIF completa para ficar de pé (alinhada às caixas)
+            val matrix = Matrix()
+            var needsTransform = true
+            when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> {
+                    matrix.preScale(-1f, 1f)
+                    matrix.postRotate(270f)
+                }
+                ExifInterface.ORIENTATION_TRANSVERSE -> {
+                    matrix.preScale(-1f, 1f)
+                    matrix.postRotate(90f)
+                }
+                else -> needsTransform = false
+            }
+
+            val rotatedBitmap = if (needsTransform) {
                 val rotated = Bitmap.createBitmap(decodedBitmap, 0, 0, decodedBitmap.width, decodedBitmap.height, matrix, true)
                 if (rotated != decodedBitmap) {
                     decodedBitmap.recycle()

@@ -183,6 +183,8 @@ fun AppCacauCEPEC() {
             if (ensaioNome.isBlank()) {
                 ensaioNome = salvos.first().ensaioManual.ifBlank { "TC-1801" }
             }
+            // Garante que fotos de sessões anteriores tenham cópia pronta em files/fotos_sync/
+            PersistenciaLocalRegistros.salvarRegistros(context, salvos)
         }
         launcherPermissoes.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
     }
@@ -1203,9 +1205,9 @@ fun DialogConfiguracaoServidor(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE) }
 
-    var url by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
-    var email by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
-    var pass by remember { mutableStateOf(prefs.getString("user_pass", "") ?: "") }
+    var url by remember { mutableStateOf((prefs.getString("server_url", "") ?: "").ifBlank { CacauSyncClient.DEFAULT_SERVER_URL }) }
+    var email by remember { mutableStateOf((prefs.getString("user_email", "") ?: "").ifBlank { CacauSyncClient.DEFAULT_EMAIL }) }
+    var pass by remember { mutableStateOf((prefs.getString("user_pass", "") ?: "").ifBlank { CacauSyncClient.DEFAULT_PASS }) }
     var ensaio by remember { mutableStateOf(prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801") }
     var testando by remember { mutableStateOf(false) }
     var resultadoTeste by remember { mutableStateOf<String?>(null) }
@@ -1213,19 +1215,19 @@ fun DialogConfiguracaoServidor(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Configurar CacauSync", fontWeight = FontWeight.Bold) },
+        title = { Text("Configurações Avançadas (Opcional)", fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Insira o IP/URL do computador da CEPLAC onde o CacauSync está rodando (porta 8080):",
+                    "O envio principal já descobre o PC sozinho via USB ou Wi-Fi. Use abaixo apenas se quiser fixar outro servidor:",
                     fontSize = 12.sp,
                     color = Color.DarkGray
                 )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("URL do Servidor") },
-                    placeholder = { Text("http://10.0.2.2:8080 ou IP local:8080") },
+                    label = { Text("URL do Servidor (Auto-descoberta ativa)") },
+                    placeholder = { Text("http://127.0.0.1:8080 ou IP local:8080") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1233,7 +1235,7 @@ fun DialogConfiguracaoServidor(
                     value = email,
                     onValueChange = { email = it },
                     label = { Text("E-mail Institucional") },
-                    placeholder = { Text("pesquisador@cepec.gov.br") },
+                    placeholder = { Text("coordenador@cepec.gov.br") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1286,13 +1288,18 @@ fun DialogConfiguracaoServidor(
                 TextButton(
                     onClick = {
                         testando = true
-                        resultadoTeste = "Conectando..."
+                        resultadoTeste = "Buscando PC automaticamente..."
                         coroutineScope.launch(Dispatchers.IO) {
-                            val res = CacauSyncClient.login(url, email, pass)
+                            val descoberto = CacauSyncClient.descobrirServidorAutomaticamente(url)
+                            val targetUrl = descoberto ?: url
+                            val res = CacauSyncClient.login(targetUrl, email, pass)
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
                                 testando = false
+                                if (descoberto != null) {
+                                    url = descoberto
+                                }
                                 resultadoTeste = if (res.isSuccess) {
-                                    "Conectado com sucesso!"
+                                    "Conectado com sucesso em $targetUrl!"
                                 } else {
                                     "Erro: ${res.exceptionOrNull()?.message}"
                                 }
@@ -1301,10 +1308,10 @@ fun DialogConfiguracaoServidor(
                     },
                     enabled = !testando
                 ) {
-                    Text(if (testando) "Testando..." else "TESTAR")
+                    Text(if (testando) "Buscando..." else "AUTO-DETECTAR")
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("CANCELAR")
+                    Text("FECHAR")
                 }
             }
         }
@@ -1323,7 +1330,6 @@ fun TelaGaleria(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("cacausync_prefs", Context.MODE_PRIVATE) }
 
     var mostrarConfigServidor by remember { mutableStateOf(false) }
     var sincronizando by remember { mutableStateOf(false) }
@@ -1382,11 +1388,11 @@ fun TelaGaleria(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("Registros: $ensaio", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("${registros.size} coletados", fontSize = 12.sp, color = Color.Gray)
+                Text("${registros.size} coletados • Envio automático 1-clique", fontSize = 12.sp, color = Color.Gray)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { mostrarConfigServidor = true }) {
-                    Icon(Icons.Default.CloudSync, "Configurar CacauSync", tint = Color(0xFF1976D2))
+                    Icon(Icons.Default.CloudSync, "Configurações Avançadas", tint = Color(0xFF1976D2))
                 }
                 IconButton(onClick = { exportarCSVCEPEC_Personalizado(context, registros, l1, l2, l3) }) {
                     Icon(Icons.Default.FileDownload, "Exportar CSV", tint = Color(0xFF2E7D32))
@@ -1396,44 +1402,22 @@ fun TelaGaleria(
 
         Spacer(Modifier.height(8.dp))
 
-        // Botão principal de sincronização
+        // Botão principal de sincronização 1-clique (Zero-Config: descobre PC via USB ou Wi-Fi sozinho)
         Button(
             onClick = {
                 if (registros.isEmpty()) {
                     Toast.makeText(context, "Nenhum registro para sincronizar.", Toast.LENGTH_SHORT).show()
                     return@Button
                 }
-                val url = prefs.getString("server_url", "") ?: ""
-                val email = prefs.getString("user_email", "") ?: ""
-                val pass = prefs.getString("user_pass", "") ?: ""
-                val ensaioCod = prefs.getString("codigo_ensaio", ensaio.ifBlank { "TC-1801" }) ?: "TC-1801"
-
-                if (url.isBlank() || email.isBlank() || pass.isBlank()) {
-                    mostrarConfigServidor = true
-                    Toast.makeText(context, "Configure a URL do servidor, e-mail e senha antes de sincronizar.", Toast.LENGTH_LONG).show()
-                    return@Button
-                }
 
                 sincronizando = true
-                statusSyncMensagem = "Autenticando no CacauSync..."
+                statusSyncMensagem = "Procurando PC (USB / Wi-Fi)..."
                 val snapshotRegistros = registros.toList()
 
                 coroutineScope.launch(Dispatchers.IO) {
-                    val loginRes = CacauSyncClient.login(url, email, pass)
-                    if (loginRes.isFailure) {
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            sincronizando = false
-                            resultadoSyncDialog = "Falha no login com o servidor:\n${loginRes.exceptionOrNull()?.message}\n\nVerifique se o computador com CacauSync está ligado e se o IP está correto no botão de nuvem."
-                        }
-                        return@launch
-                    }
-
-                    val token = loginRes.getOrThrow()
-                    val syncRes = CacauSyncClient.sincronizar(
+                    val syncRes = CacauSyncClient.sincronizarAutomatico(
                         context = context,
-                        serverUrl = url,
-                        token = token,
-                        codigoEnsaio = ensaioCod,
+                        ensaioPadrao = ensaio.ifBlank { "TC-1801" },
                         registros = snapshotRegistros,
                         onProgresso = { msg ->
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -1456,34 +1440,35 @@ fun TelaGaleria(
                         PersistenciaLocalRegistros.salvarRegistros(context, registros)
                         if (syncRes.isSuccess) {
                             val res = syncRes.getOrThrow()
-                            var resumo = "Sincronização concluída com sucesso!\n\n" +
+                            var resumo = "Enviado para o PC com sucesso!\n" +
+                                    "Servidor: ${res.servidorUtilizado}\n\n" +
                                     "• Total processadas: ${res.totalProcessadas}\n" +
                                     "• Leituras novas inseridas: ${res.novasInseridas}\n" +
-                                    "• Leituras existentes: ${res.duplicadasIgnoradas}\n" +
-                                    "• Fotos enviadas: ${res.fotosEnviadas}\n"
+                                    "• Leituras atualizadas/existentes: ${res.duplicadasIgnoradas}\n" +
+                                    "• Fotos enviadas com caixas YOLO: ${res.fotosEnviadas}\n"
                             if (res.mensagens.isNotEmpty()) {
                                 resumo += "\nAvisos do servidor:\n" + res.mensagens.take(3).joinToString("\n")
                             }
                             resultadoSyncDialog = resumo
                         } else {
-                            resultadoSyncDialog = "Erro na sincronização:\n${syncRes.exceptionOrNull()?.message}"
+                            resultadoSyncDialog = "Não foi possível enviar automaticamente:\n${syncRes.exceptionOrNull()?.message}"
                         }
                     }
                 }
             },
             enabled = !sincronizando && registros.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
             shape = RoundedCornerShape(10.dp)
         ) {
             if (sincronizando) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
-                Text(statusSyncMensagem, fontSize = 13.sp)
+                Text(statusSyncMensagem, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             } else {
                 Icon(Icons.Default.CloudUpload, null)
                 Spacer(Modifier.width(8.dp))
-                Text("SINCRONIZAR COM CACAUSYNC (${registros.size})")
+                Text("ENVIAR PARA O PC AGORA (${registros.size})", fontWeight = FontWeight.Bold)
             }
         }
 
