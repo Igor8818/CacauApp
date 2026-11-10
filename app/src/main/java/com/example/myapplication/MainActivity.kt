@@ -385,7 +385,21 @@ fun AppCacauCEPEC() {
                                 labelVariavel1 = l1; labelVariavel2 = l2; labelVariavel3 = l3
                                 tipoNumVariavel2 = n2; tipoNumVariavel3 = n3
                             },
-                            cloneVal = valorVariavel1, onCloneChange = { valorVariavel1 = it },
+                            cloneVal = valorVariavel1,
+                            onCloneChange = { novoClone ->
+                                valorVariavel1 = novoClone
+                                val pontoRota = rotaPreCarregada.firstOrNull { it.clone.equals(novoClone.trim(), ignoreCase = true) }
+                                if (pontoRota != null) {
+                                    val pInt = pontoRota.parcela.toIntOrNull()
+                                    if (pInt != null) {
+                                        valorNumVariavel2 = pInt
+                                    } else {
+                                        valorTxtVariavel2 = pontoRota.parcela
+                                    }
+                                    valorNumVariavel3 = pontoRota.planta
+                                    valorTxtVariavel3 = pontoRota.planta.toString()
+                                }
+                            },
                             historicoClones = historicoValores1,
                             parcelaNum = valorNumVariavel2, onParcelaNumChange = { valorNumVariavel2 = it },
                             parcelaTxt = valorTxtVariavel2, onParcelaTxtChange = { valorTxtVariavel2 = it },
