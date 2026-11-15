@@ -179,9 +179,9 @@ fun TelaConfiguracaoModelo(
 
                         // Chips dos labels atuais
                         if (listaLabels.isNotEmpty()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                listaLabels.chunked(3).forEach { linha ->
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listaLabels.chunked(2).forEach { linha ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                                         linha.forEach { label ->
                                             LabelChip(
                                                 texto = label,

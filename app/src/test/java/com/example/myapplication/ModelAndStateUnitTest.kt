@@ -6,6 +6,7 @@ import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.data.RegistroCacau
 import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.userinterface.EstadoFruto
+import com.example.myapplication.userinterface.util.ObjectDetectorHelper
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -18,20 +19,58 @@ class ModelAndStateUnitTest {
     fun testModelConfig_FieldReadyDefaults() {
         val config = ModelConfig()
 
-        // Verifica os novos padrões otimizados para campo (sombra sob copa/cabruca)
+        // Verifica os padrões otimizados para campo e suporte fitossanitário multi-classe
         assertEquals(0.30f, config.threshold, 0.001f)
         assertEquals(25, config.maxResultados)
+        assertTrue(config.labelsFiltro.containsAll(listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa")))
         assertTrue(config.labelsFiltro.contains("cacau"))
         assertTrue(config.labelsFiltro.contains("fruto"))
     }
 
     @Test
-    fun testModelosEmbutidos_ContainsDetectorTflite() {
-        assertFalse(MODELOS_EMBUTIDOS.isEmpty())
+    fun testModelosEmbutidos_ContainsDoencaAndContagemModels() {
+        assertTrue(MODELOS_EMBUTIDOS.size >= 2)
         val defaultModel = MODELOS_EMBUTIDOS.first()
-        assertEquals("detector.tflite", defaultModel.nomeArquivo)
+        assertEquals("detector_doenca.tflite", defaultModel.nomeArquivo)
         assertTrue(defaultModel.nomeExibicao.contains("CEPEC"))
-        assertTrue(defaultModel.labelsDefault.contains("cacau"))
+        assertEquals(listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa"), defaultModel.labelsDefault)
+
+        val fallbackContagem = MODELOS_EMBUTIDOS.firstOrNull { it.nomeArquivo == "detector.tflite" }
+        assertNotNull("Modelo de contagem detector.tflite deve permanecer disponível", fallbackContagem)
+        assertTrue(fallbackContagem!!.labelsDefault.contains("cacau"))
+    }
+
+    @Test
+    fun testMapearLabelParaEstadoFruto_MultiClassAndLegacy() {
+        assertEquals(EstadoFruto.PODRIDAO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto("PodridaoParda"))
+        assertEquals(EstadoFruto.PODRIDAO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto("Moniliase"))
+        assertEquals(EstadoFruto.SADIO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto("Sadio"))
+        assertEquals(EstadoFruto.VASSOURA, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto("VassouraBruxa"))
+        assertEquals(EstadoFruto.SADIO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto("cacau"))
+        assertEquals(EstadoFruto.SADIO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto(null))
+    }
+
+    @Test
+    fun testResolverRotuloPorIndice_4ClassDefaultsAndCustomLabels() {
+        val helper4Classes = com.example.myapplication.userinterface.util.ObjectDetectorHelper.resolverRotuloPorIndice(
+            classIdx = 3,
+            modelLabels = emptyList(),
+            customLabels = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa", "cacau", "fruto"),
+            yoloNumClasses = 4,
+            modelPath = "detector_doenca.tflite",
+            fallback = "cacau"
+        )
+        assertEquals("VassouraBruxa", helper4Classes)
+
+        val fallback4WhenGeneric = com.example.myapplication.userinterface.util.ObjectDetectorHelper.resolverRotuloPorIndice(
+            classIdx = 1,
+            modelLabels = emptyList(),
+            customLabels = emptyList(),
+            yoloNumClasses = 4,
+            modelPath = "custom.tflite",
+            fallback = "cacau"
+        )
+        assertEquals("Moniliase", fallback4WhenGeneric)
     }
 
     @Test
@@ -109,5 +148,44 @@ class ModelAndStateUnitTest {
         assertEquals(0, reg.naoAvaliavel)
         assertEquals(4, reg.caixas.size)
         assertEquals("PENDENTE", reg.statusSync)
+    }
+
+    @Test
+    fun `refinarClasseDoencaPorMorfologiaCor distingue VassouraBruxa seca escura de PodridaoParda quente`() {
+        val w = 100
+        val h = 100
+        // Fruto vassourado (seco/acinzentado-escuro: RGB ~ 115, 105, 102)
+        val pxVassoura = (0xFF shl 24) or (115 shl 16) or (105 shl 8) or 102
+        val gridVassoura = IntArray(w * h) { pxVassoura }
+        val clsVassoura = ObjectDetectorHelper.refinarClasseDoencaPorMorfologiaCor(
+            classIdx = 0,
+            probBest = 0.88f,
+            probClass0 = 0.88f,
+            pixels = gridVassoura,
+            width = w,
+            height = h,
+            x1Tensor = 10f,
+            y1Tensor = 10f,
+            x2Tensor = 90f,
+            y2Tensor = 90f
+        )
+        assertEquals(3, clsVassoura)
+
+        // Fruto com Podridão Parda (fundo amarelo/marrom quente: RGB ~ 215, 190, 140)
+        val pxPodridao = (0xFF shl 24) or (215 shl 16) or (190 shl 8) or 140
+        val gridPodridao = IntArray(w * h) { pxPodridao }
+        val clsPodridao = ObjectDetectorHelper.refinarClasseDoencaPorMorfologiaCor(
+            classIdx = 0,
+            probBest = 0.90f,
+            probClass0 = 0.90f,
+            pixels = gridPodridao,
+            width = w,
+            height = h,
+            x1Tensor = 10f,
+            y1Tensor = 10f,
+            x2Tensor = 90f,
+            y2Tensor = 90f
+        )
+        assertEquals(0, clsPodridao)
     }
 }

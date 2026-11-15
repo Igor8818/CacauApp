@@ -134,6 +134,94 @@ class YoloDetectionAndScaleUnitTest {
         assertTrue("Grafo TFLite deve conter tensor de entrada 'inputs_0'", tailAscii.contains("inputs_0"))
     }
 
+    @Test
+    fun testDetectorDoencaTfliteAsset_BinaryIntegrityAndTensorContract() {
+        val candidates = listOf(
+            java.io.File("src/main/assets/detector_doenca.tflite"),
+            java.io.File("app/src/main/assets/detector_doenca.tflite")
+        )
+        val modelFile = candidates.firstOrNull { it.exists() }
+        assertNotNull("O modelo detector_doenca.tflite deve existir na pasta assets do projeto", modelFile)
+        assertTrue("O modelo detector_doenca.tflite deve ter mais de 10 MB (YOLO11n Float32)", modelFile!!.length() > 10_000_000L)
+
+        val header = ByteArray(16)
+        modelFile.inputStream().use { it.read(header) }
+        val magic = String(header, 4, 4, Charsets.US_ASCII)
+        assertEquals("Cabeçalho FlatBuffer TFLite válido (TFL3)", "TFL3", magic)
+
+        val tailSize = 250_000.coerceAtMost(modelFile.length().toInt())
+        val tailBytes = ByteArray(tailSize)
+        java.io.RandomAccessFile(modelFile, "r").use { raf ->
+            raf.seek(modelFile.length() - tailSize)
+            raf.readFully(tailBytes)
+        }
+        val tailAscii = String(tailBytes, Charsets.US_ASCII)
+        assertTrue(
+            "Grafo TFLite do modelo de doenças deve conter tensores 'images' ou 'Identity'",
+            tailAscii.contains("images") || tailAscii.contains("Identity")
+        )
+    }
+
+    @Test
+    fun testSnappingPromotesAutomaticBoxDiseaseStateWithoutOverwritingManual() {
+        val previewAuto = com.example.myapplication.userinterface.CaixaAuditavel(
+            normLeft = 0.20f,
+            normTop = 0.20f,
+            normRight = 0.40f,
+            normBottom = 0.50f,
+            estado = com.example.myapplication.userinterface.EstadoFruto.SADIO,
+            manual = false,
+            confianca = 0.72f,
+            label = "Sadio"
+        )
+        val manualVassoura = com.example.myapplication.userinterface.CaixaAuditavel(
+            normLeft = 0.60f,
+            normTop = 0.60f,
+            normRight = 0.80f,
+            normBottom = 0.85f,
+            estado = com.example.myapplication.userinterface.EstadoFruto.VASSOURA,
+            manual = true,
+            confianca = 1.0f,
+            label = "VassouraBruxa"
+        )
+        val staticDetections = listOf(
+            com.example.myapplication.userinterface.DetEstilizada(
+                normLeft = 0.21f,
+                normTop = 0.21f,
+                normRight = 0.41f,
+                normBottom = 0.51f,
+                confianca = 0.91f,
+                estado = com.example.myapplication.userinterface.EstadoFruto.PODRIDAO,
+                label = "Moniliase"
+            ),
+            com.example.myapplication.userinterface.DetEstilizada(
+                normLeft = 0.61f,
+                normTop = 0.61f,
+                normRight = 0.79f,
+                normBottom = 0.84f,
+                confianca = 0.85f,
+                estado = com.example.myapplication.userinterface.EstadoFruto.SADIO,
+                label = "Sadio"
+            )
+        )
+
+        val fundidas = com.example.myapplication.userinterface.fundirDeteccoesComSnapping(
+            caixasAtuais = listOf(previewAuto, manualVassoura),
+            deteccoesEstaticas = staticDetections,
+            caixasExcluidas = emptyList()
+        )
+
+        assertEquals(2, fundidas.size)
+        // Caixa automática em SADIO é promovida para PODRIDAO / Moniliase com snapping de coordenadas
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.PODRIDAO, fundidas[0].estado)
+        assertEquals("Moniliase", fundidas[0].label)
+        assertEquals(0.21f, fundidas[0].normLeft, 0.001f)
+        // Caixa manual permanece intocada em VASSOURA
+        assertTrue(fundidas[1].manual)
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.VASSOURA, fundidas[1].estado)
+        assertEquals("VassouraBruxa", fundidas[1].label)
+    }
+
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
         val sorted = boxes.sortedByDescending { it[4] }.toMutableList()
         val result = mutableListOf<FloatArray>()

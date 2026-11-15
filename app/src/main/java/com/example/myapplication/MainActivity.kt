@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -242,14 +243,15 @@ fun AppCacauCEPEC() {
                         ObjectDetectorHelper.ModelSource.External(extUri, cfg.modeloExternoNome)
                     emb != null ->
                         ObjectDetectorHelper.ModelSource.Asset(emb.nomeArquivo)
-                    else -> ObjectDetectorHelper.ModelSource.Asset("detector.tflite")
+                    else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
                 }
                 ObjectDetectorHelper(
                     context = context,
                     detectorListener = null,
                     modelSource = source,
                     scoreThreshold = cfg.threshold,
-                    maxResults = cfg.maxResultados
+                    maxResults = cfg.maxResultados,
+                    customLabels = cfg.labelsFiltro
                 )
             }
             DisposableEffect(detectorHelperRevisao) {
@@ -623,14 +625,15 @@ fun TelaPrincipalCapturaOtimizada(
                 ObjectDetectorHelper.ModelSource.External(modelConfig.modeloExternoUri, modelConfig.modeloExternoNome)
             modelConfig.modeloSelecionado != null ->
                 ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSelecionado.nomeArquivo)
-            else -> ObjectDetectorHelper.ModelSource.Asset("detector.tflite")
+            else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
         }
         ObjectDetectorHelper(
             context = context,
             detectorListener = null,
             modelSource = source,
             scoreThreshold = modelConfig.threshold,
-            maxResults = modelConfig.maxResultados
+            maxResults = modelConfig.maxResultados,
+            customLabels = modelConfig.labelsFiltro
         )
     }
 
@@ -669,19 +672,33 @@ fun TelaPrincipalCapturaOtimizada(
                 }
             }
 
-            // Badge do modelo ativo
+            // Badge do modelo ativo (compacto e sem quebra vertical)
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = Color(0xFFE8F5E9),
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(Icons.Default.SmartToy, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Modelo: ${modelConfig.nomeExibicao}", fontSize = 12.sp, color = Color(0xFF2E7D32))
-                    if (modelConfig.labelsFiltro.isNotEmpty()) {
-                        Text(" • Labels: ${modelConfig.labelsFiltro.take(3).joinToString(", ")}${if (modelConfig.labelsFiltro.size > 3) "..." else ""}", fontSize = 11.sp, color = Color.Gray)
-                    }
+                    Text(
+                        text = buildString {
+                            append(modelConfig.nomeExibicao)
+                            append(" • ${(modelConfig.threshold * 100).toInt()}%")
+                            if (modelConfig.labelsFiltro.isNotEmpty()) {
+                                append(" (${modelConfig.labelsFiltro.take(3).joinToString(", ")}${if (modelConfig.labelsFiltro.size > 3) "…" else ""})")
+                            }
+                        },
+                        fontSize = 12.sp,
+                        color = Color(0xFF2E7D32),
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
@@ -771,10 +788,20 @@ fun TelaPrincipalCapturaOtimizada(
 
             if (isNum3) {
                 Card(modifier = Modifier.fillMaxWidth().height(100.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F8E9))) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        IconButton(onClick = { if (plantaNum > 1) onPlantaNumChange(plantaNum - 1) }) {
+                            Icon(Icons.Default.RemoveCircle, contentDescription = "Planta anterior", tint = Color.Red, modifier = Modifier.size(40.dp))
+                        }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(label3.uppercase(), fontSize = 12.sp)
-                            Text("$plantaNum", fontSize = 48.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1B5E20))
+                            Text(label3.uppercase(), fontSize = 12.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+                            Text("$plantaNum", fontSize = 44.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1B5E20))
+                        }
+                        IconButton(onClick = { onPlantaNumChange(plantaNum + 1) }) {
+                            Icon(Icons.Default.AddCircle, contentDescription = "Próxima planta", tint = Color(0xFF2E7D32), modifier = Modifier.size(40.dp))
                         }
                     }
                 }
@@ -1050,14 +1077,15 @@ fun TelaModoFieldBook(
                 ObjectDetectorHelper.ModelSource.External(modelConfig.modeloExternoUri, modelConfig.modeloExternoNome)
             modelConfig.modeloSelecionado != null ->
                 ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSelecionado.nomeArquivo)
-            else -> ObjectDetectorHelper.ModelSource.Asset("detector.tflite")
+            else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
         }
         ObjectDetectorHelper(
             context = context,
             detectorListener = null,
             modelSource = source,
             scoreThreshold = modelConfig.threshold,
-            maxResults = modelConfig.maxResultados
+            maxResults = modelConfig.maxResultados,
+            customLabels = modelConfig.labelsFiltro
         )
     }
 

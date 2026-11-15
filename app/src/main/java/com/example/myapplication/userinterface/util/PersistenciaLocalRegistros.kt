@@ -138,11 +138,12 @@ object PersistenciaLocalRegistros {
                 val w = c.optDouble("largura", 0.1).toFloat()
                 val h = c.optDouble("altura", 0.1).toFloat()
                 val classeStr = c.optString("classe", "Sadio")
+                val rawLabel = c.optString("label", classeStr)
                 val estado = EstadoFruto.entries.firstOrNull {
                     it.rotulo.equals(classeStr, ignoreCase = true) ||
                             it.rotuloCurto.equals(classeStr, ignoreCase = true) ||
                             it.name.equals(classeStr, ignoreCase = true)
-                } ?: EstadoFruto.SADIO
+                } ?: com.example.myapplication.userinterface.mapearLabelParaEstadoFruto(rawLabel)
                 caixas.add(
                     CaixaAuditavel(
                         normLeft = x.coerceIn(0f, 1f),
@@ -151,7 +152,8 @@ object PersistenciaLocalRegistros {
                         normBottom = (y + h).coerceIn(0f, 1f),
                         estado = estado,
                         manual = c.optBoolean("manual", false),
-                        confianca = c.optDouble("confianca", 0.9).toFloat()
+                        confianca = c.optDouble("confianca", 0.9).toFloat(),
+                        label = rawLabel
                     )
                 )
             }
@@ -185,6 +187,7 @@ object PersistenciaLocalRegistros {
             arr.put(
                 JSONObject().apply {
                     put("classe", cx.estado.rotulo)
+                    put("label", cx.label)
                     put("confianca", cx.confianca.toDouble())
                     put("x", cx.normLeft.toDouble())
                     put("y", cx.normTop.toDouble())
@@ -265,22 +268,44 @@ object PersistenciaLocalRegistros {
             val externoNome = prefs.getString(KEY_EXTERNO_NOME, "") ?: ""
             val labelsJson = prefs.getString(KEY_LABELS, null)
 
+            val labelsPadrao = com.example.myapplication.data.LABELS_DOENCA_CACAU + listOf("cacau", "fruto")
             val labels = if (!labelsJson.isNullOrBlank()) {
                 try {
                     val arr = JSONArray(labelsJson)
                     (0 until arr.length()).map { arr.getString(it) }
                 } catch (_: Exception) {
-                    listOf("cacau", "fruto")
+                    labelsPadrao
                 }
             } else {
-                listOf("cacau", "fruto")
+                labelsPadrao
             }
 
+            // Migra suavemente preferências antigas do modelo padrão de contagem ("detector.tflite" + cacau/fruto)
+            // para o novo modelo fitossanitário ("detector_doenca.tflite"), preservando seleções customizadas posteriores.
+            val jaMigradoV2 = prefs.getBoolean("migrado_doenca_v2", false)
+            val usarMigracaoPadrao = !jaMigradoV2 &&
+                externoUriStr.isNullOrBlank() &&
+                (modeloArquivo == null || modeloArquivo == "detector.tflite")
+
             val modeloEmbutido = if (externoUriStr.isNullOrBlank()) {
-                MODELOS_EMBUTIDOS.firstOrNull { it.nomeArquivo == modeloArquivo }
-                    ?: MODELOS_EMBUTIDOS.firstOrNull()
+                if (usarMigracaoPadrao) {
+                    MODELOS_EMBUTIDOS.firstOrNull { it.nomeArquivo == "detector_doenca.tflite" }
+                        ?: MODELOS_EMBUTIDOS.firstOrNull()
+                } else {
+                    MODELOS_EMBUTIDOS.firstOrNull { it.nomeArquivo == modeloArquivo }
+                        ?: MODELOS_EMBUTIDOS.firstOrNull()
+                }
             } else {
                 null
+            }
+
+            val labelsEfetivas = if (usarMigracaoPadrao) labelsPadrao else labels
+            if (usarMigracaoPadrao && modeloEmbutido != null) {
+                prefs.edit()
+                    .putBoolean("migrado_doenca_v2", true)
+                    .putString(KEY_MODELO_ARQUIVO, modeloEmbutido.nomeArquivo)
+                    .putString(KEY_LABELS, JSONArray().apply { labelsEfetivas.forEach { put(it) } }.toString())
+                    .apply()
             }
 
             val externoUri = if (!externoUriStr.isNullOrBlank()) {
@@ -291,7 +316,7 @@ object PersistenciaLocalRegistros {
                 modeloSelecionado = modeloEmbutido,
                 modeloExternoUri = externoUri,
                 modeloExternoNome = externoNome,
-                labelsFiltro = labels,
+                labelsFiltro = labelsEfetivas,
                 threshold = threshold,
                 maxResultados = maxResultados
             )

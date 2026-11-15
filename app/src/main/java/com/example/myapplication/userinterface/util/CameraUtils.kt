@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -166,6 +167,18 @@ fun BoundingBoxOverlay(
     bitmapHeight: Float,
     modifier: Modifier = Modifier
 ) {
+    val badgePaint = androidx.compose.runtime.remember {
+        android.graphics.Paint().apply { isAntiAlias = true }
+    }
+    val textPaint = androidx.compose.runtime.remember {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 26f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            isAntiAlias = true
+        }
+    }
+
     Canvas(modifier = modifier) {
         if (bitmapWidth <= 0f || bitmapHeight <= 0f || size.width <= 0f || size.height <= 0f) return@Canvas
 
@@ -197,12 +210,45 @@ fun BoundingBoxOverlay(
             val screenWidth = rect.width() * scale
             val screenHeight = rect.height() * scale
 
-            // Desenha o retângulo verde vibrante
+            val cat = det.categories.firstOrNull()
+            val rawLabel = cat?.label
+            val estado = com.example.myapplication.userinterface.mapearLabelParaEstadoFruto(rawLabel)
+            val boxColor = estado.cor
+
+            // Caixa colorida por classe fitossanitária
             drawRect(
-                color = Color(0xFF00E676),
+                color = boxColor,
                 topLeft = androidx.compose.ui.geometry.Offset(screenLeft, screenTop),
                 size = androidx.compose.ui.geometry.Size(screenWidth, screenHeight),
                 style = Stroke(width = 3.dp.toPx())
+            )
+
+            val curto = com.example.myapplication.userinterface.rotuloCurtoDoenca(estado, rawLabel ?: estado.rotuloCurto)
+            val confPct = ((cat?.score ?: 0f) * 100f).toInt()
+            val badgeText = if (confPct > 0) "$curto $confPct%" else curto
+            val textW = textPaint.measureText(badgeText)
+            val badgeH = 32f
+            val badgeTop = (screenTop - badgeH - 2f).coerceAtLeast(0f)
+            badgePaint.color = android.graphics.Color.argb(
+                220,
+                (boxColor.red * 255).toInt(),
+                (boxColor.green * 255).toInt(),
+                (boxColor.blue * 255).toInt()
+            )
+            drawContext.canvas.nativeCanvas.drawRoundRect(
+                screenLeft,
+                badgeTop,
+                screenLeft + textW + 14f,
+                badgeTop + badgeH,
+                6f,
+                6f,
+                badgePaint
+            )
+            drawContext.canvas.nativeCanvas.drawText(
+                badgeText,
+                screenLeft + 7f,
+                badgeTop + badgeH - 8f,
+                textPaint
             )
         }
     }

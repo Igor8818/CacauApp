@@ -2,11 +2,13 @@ package com.example.myapplication.data
 
 import android.net.Uri
 
+val LABELS_DOENCA_CACAU = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa")
+
 // Modelos embutidos no APK (ficam na pasta assets/)
 data class ModelEmbutido(
-    val nomeArquivo: String,       // ex: "detector.tflite"
-    val nomeExibicao: String,      // ex: "Cacau CEPEC v1"
-    val descricao: String,         // ex: "Detecção de frutos de cacau"
+    val nomeArquivo: String,       // ex: "detector_doenca.tflite"
+    val nomeExibicao: String,      // ex: "Cacau Doenças CEPEC (IA Fitossanitária)"
+    val descricao: String,         // ex: "Detecta frutos e classifica doenças"
     val labelsDefault: List<String> // rótulos padrão desse modelo
 )
 
@@ -18,7 +20,7 @@ data class ModelConfig(
     val modeloExternoNome: String = "",
 
     // Filtros de detecção
-    val labelsFiltro: List<String> = listOf("cacau", "fruto"),
+    val labelsFiltro: List<String> = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa", "cacau", "fruto"),
     val threshold: Float = 0.30f,
     val maxResultados: Int = 25
 ) {
@@ -37,14 +39,15 @@ data class ModelConfig(
 // o label que o modelo devolve nunca bate com o filtro configurado.
 val MODELOS_EMBUTIDOS = listOf(
     ModelEmbutido(
+        nomeArquivo = "detector_doenca.tflite",
+        nomeExibicao = "Cacau Doenças CEPEC (IA Fitossanitária)",
+        descricao = "Detecta frutos e classifica automaticamente: Sadio, Vassoura-de-Bruxa, Podridão Parda e Monilíase",
+        labelsDefault = LABELS_DOENCA_CACAU
+    ),
+    ModelEmbutido(
         nomeArquivo = "detector.tflite",
-        nomeExibicao = "Cacau CEPEC (Padrão)",
-        descricao = "Modelo padrão para detecção de frutos de cacau",
+        nomeExibicao = "Cacau Contagem CEPEC (Apenas Frutos)",
+        descricao = "Modelo clássico de contagem geral de frutos de cacau",
         labelsDefault = listOf("cacau", "fruto")
     )
-    // Removida a entrada placeholder "Frutas Genéricas (Demo)": ela apontava para
-    // o mesmo detector.tflite do cacau, mas filtrava por labels ("apple", "banana",
-    // "orange") que o modelo nunca retorna — resultado era zero detecções, sem erro
-    // nenhum na tela. Quando houver um modelo genérico de verdade treinado e
-    // exportado, basta adicionar uma nova entrada aqui com o nomeArquivo correto.
 )

@@ -52,6 +52,35 @@ enum class EstadoFruto(
 }
 
 /**
+ * Mapeia o rótulo devolvido pelo modelo TFLite (ex.: "PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa")
+ * para a categoria fitossanitária oficial do CacauApp / CacauSync.
+ */
+internal fun mapearLabelParaEstadoFruto(label: String?): EstadoFruto {
+    val norm = label?.trim()?.lowercase() ?: return EstadoFruto.SADIO
+    return when {
+        norm.contains("vassoura") -> EstadoFruto.VASSOURA
+        norm.contains("podridao") || norm.contains("podridão") ||
+            norm.contains("monilia") || norm.contains("monília") -> EstadoFruto.PODRIDAO
+        norm.contains("nao_avaliavel") || norm.contains("não avaliável") ||
+            norm.contains("nao aval") || norm.contains("não aval") ||
+            norm.contains("inavaliavel") -> EstadoFruto.NAO_AVALIAVEL
+        else -> EstadoFruto.SADIO
+    }
+}
+
+/**
+ * Formata um rótulo curto amigável para exibir na caixinha (preservando Monilíase / Podridão Parda quando conhecido).
+ */
+internal fun rotuloCurtoDoenca(estado: EstadoFruto, labelOriginal: String?): String {
+    val norm = labelOriginal?.trim()?.lowercase() ?: return estado.rotuloCurto
+    return when {
+        estado == EstadoFruto.PODRIDAO && norm.contains("monilia") -> "Monilíase"
+        estado == EstadoFruto.PODRIDAO && (norm.contains("parda") || norm.contains("podridao") || norm.contains("podridão")) -> "Podridão"
+        else -> estado.rotuloCurto
+    }
+}
+
+/**
  * Caixa de detecção auditável com coordenadas normalizadas (0.0 a 1.0)
  * para perfeita fidelidade em qualquer tamanho de foto e tela.
  */
@@ -62,7 +91,8 @@ data class CaixaAuditavel(
     val normBottom: Float,
     val estado: EstadoFruto = EstadoFruto.SADIO,
     val manual: Boolean = false,
-    val confianca: Float = 0.90f
+    val confianca: Float = 0.90f,
+    val label: String = "Sadio"
 ) {
     val centroX: Float get() = (normLeft + normRight) / 2f
     val centroY: Float get() = (normTop + normBottom) / 2f
@@ -154,7 +184,8 @@ data class DetEstilizada(
     val normRight: Float,
     val normBottom: Float,
     val confianca: Float,
-    val estado: EstadoFruto = EstadoFruto.SADIO
+    val estado: EstadoFruto = EstadoFruto.SADIO,
+    val label: String = "Sadio"
 )
 
 /**
@@ -182,6 +213,12 @@ internal fun fundirDeteccoesComSnapping(
         }
         if (foiExcluida) continue
 
+        // Não duplica fruto que o usuário já desenhou manualmente
+        val cobreManual = resultado.any { c ->
+            c.manual && iouNorm(c, det.normLeft, det.normTop, det.normRight, det.normBottom) > 0.35f
+        }
+        if (cobreManual) continue
+
         // Procura a caixa automática com maior sobreposição (IoU > 0.20f)
         var melhorIdx = -1
         var melhorIou = 0.20f
@@ -201,12 +238,16 @@ internal fun fundirDeteccoesComSnapping(
         if (melhorIdx >= 0) {
             indicesPareados.add(melhorIdx)
             val existente = resultado[melhorIdx]
-            // SNAP: atualiza para a coordenada exata da foto estática preservando o estado selecionado pelo usuário
+            // SNAP: atualiza para a coordenada exata da foto estática.
+            // Se a caixa automática estava em SADIO (default/preview) e a inferência estática detectou doença, promove o estado.
+            val promoverDoenca = !existente.manual && existente.estado == EstadoFruto.SADIO && det.estado != EstadoFruto.SADIO
             resultado[melhorIdx] = existente.copy(
                 normLeft = det.normLeft,
                 normTop = det.normTop,
                 normRight = det.normRight,
                 normBottom = det.normBottom,
+                estado = if (promoverDoenca) det.estado else existente.estado,
+                label = if (promoverDoenca) det.label else existente.label,
                 confianca = maxOf(existente.confianca, det.confianca)
             )
         } else {
@@ -219,7 +260,8 @@ internal fun fundirDeteccoesComSnapping(
                     normBottom = det.normBottom,
                     estado = det.estado,
                     manual = false,
-                    confianca = det.confianca
+                    confianca = det.confianca,
+                    label = det.label
                 )
             )
         }
@@ -272,16 +314,20 @@ fun TelaRevisaoCaptura(
                 val hRef = bitmapHeightRef.coerceAtLeast(1f)
                 deteccoesIniciais.forEach { det ->
                     val rect = det.boundingBox
-                    val score = det.categories.firstOrNull()?.score ?: 0.85f
+                    val cat = det.categories.firstOrNull()
+                    val score = cat?.score ?: 0.85f
+                    val rotuloDet = cat?.label?.takeIf { it.isNotBlank() } ?: "Sadio"
+                    val estadoDet = mapearLabelParaEstadoFruto(rotuloDet)
                     add(
                         CaixaAuditavel(
                             normLeft = (rect.left / wRef).coerceIn(0f, 1f),
                             normTop = (rect.top / hRef).coerceIn(0f, 1f),
                             normRight = (rect.right / wRef).coerceIn(0f, 1f),
                             normBottom = (rect.bottom / hRef).coerceIn(0f, 1f),
-                            estado = EstadoFruto.SADIO,
+                            estado = estadoDet,
                             manual = false,
-                            confianca = score
+                            confianca = score,
+                            label = rotuloDet
                         )
                     )
                 }
@@ -357,6 +403,8 @@ fun TelaRevisaoCaptura(
                         val nR = (r.right / bmpW).coerceIn(0f, 1f)
                         val nB = (r.bottom / bmpH).coerceIn(0f, 1f)
 
+                        val rotuloBruto = cat?.label?.takeIf { it.isNotBlank() } ?: "Sadio"
+                        val estadoDet = mapearLabelParaEstadoFruto(rotuloBruto)
                         candidatasEstaticas.add(
                             DetEstilizada(
                                 normLeft = nL,
@@ -364,7 +412,8 @@ fun TelaRevisaoCaptura(
                                 normRight = nR,
                                 normBottom = nB,
                                 confianca = cat?.score ?: 0.85f,
-                                estado = EstadoFruto.SADIO
+                                estado = estadoDet,
+                                label = rotuloBruto
                             )
                         )
                     }
@@ -513,7 +562,7 @@ fun TelaRevisaoCaptura(
                         }
 
                         // Badge com a classificação sobre a caixa
-                        val label = "#${idx + 1} ${caixa.estado.rotuloCurto}"
+                        val label = "#${idx + 1} ${rotuloCurtoDoenca(caixa.estado, caixa.label)}"
                         val textWidth = textPaint.measureText(label)
                         val badgeHeight = 32f
 
