@@ -22,11 +22,22 @@ data class ModelConfig(
     // Filtros de detecção
     val labelsFiltro: List<String> = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa", "cacau", "fruto"),
     val threshold: Float = 0.30f,
-    val maxResultados: Int = 25
+    val maxResultados: Int = 25,
+    val usarDiagnosticoSecundario: Boolean = true,
+    val modeloSecundarioArquivo: String = "detector_doenca.tflite"
 ) {
+    val arquivoPrincipalEfetivo: String
+        get() = when {
+            modeloExternoUri != null -> ""
+            usarDiagnosticoSecundario -> "detector.tflite"
+            modeloSelecionado != null -> modeloSelecionado.nomeArquivo
+            else -> "detector_doenca.tflite"
+        }
+
     val nomeExibicao: String get() = when {
-        modeloSelecionado != null -> modeloSelecionado.nomeExibicao
         modeloExternoUri != null -> modeloExternoNome.ifBlank { "Modelo Externo" }
+        usarDiagnosticoSecundario -> "Contagem + Doenças CEPEC"
+        modeloSelecionado != null -> modeloSelecionado.nomeExibicao
         else -> "Nenhum modelo"
     }
 }

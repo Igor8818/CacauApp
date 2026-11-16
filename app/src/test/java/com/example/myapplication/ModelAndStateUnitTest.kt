@@ -187,5 +187,24 @@ class ModelAndStateUnitTest {
             y2Tensor = 90f
         )
         assertEquals(0, clsPodridao)
+
+        // Frutos secos marrons-escuros típicos de Vassoura de Bruxa (chirimoya / seca)
+        for ((r, g, b) in listOf(Triple(95, 72, 58), Triple(130, 105, 85))) {
+            val pxSecoEscuro = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            val gridSecoEscuro = IntArray(w * h) { pxSecoEscuro }
+            val clsSeco = ObjectDetectorHelper.refinarClasseDoencaPorMorfologiaCor(
+                classIdx = 0,
+                probBest = 0.85f,
+                probClass0 = 0.85f,
+                pixels = gridSecoEscuro,
+                width = w,
+                height = h,
+                x1Tensor = 10f,
+                y1Tensor = 10f,
+                x2Tensor = 90f,
+                y2Tensor = 90f
+            )
+            assertEquals("Esperado VassouraBruxa (3) para RGB($r,$g,$b)", 3, clsSeco)
+        }
     }
 }

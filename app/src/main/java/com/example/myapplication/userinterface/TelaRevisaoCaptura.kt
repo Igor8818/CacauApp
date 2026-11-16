@@ -270,6 +270,85 @@ internal fun fundirDeteccoesComSnapping(
     return resultado
 }
 
+internal fun fundirContagemEDiagnosticoIoU(
+    caixasContagem: List<DetEstilizada>,
+    deteccoesDoenca: List<DetEstilizada>,
+    iouMinimo: Float = 0.30f
+): List<DetEstilizada> {
+    if (deteccoesDoenca.isEmpty()) return caixasContagem
+    if (caixasContagem.isEmpty()) return deteccoesDoenca
+
+    val resultado = mutableListOf<DetEstilizada>()
+    val pareadosDoenca = mutableSetOf<Int>()
+
+    for (base in caixasContagem) {
+        var melhorIdx = -1
+        var melhorScore = -1f
+
+        for (i in deteccoesDoenca.indices) {
+            val diag = deteccoesDoenca[i]
+            val iou = iouCaixasNorm(
+                base.normLeft, base.normTop, base.normRight, base.normBottom,
+                diag.normLeft, diag.normTop, diag.normRight, diag.normBottom
+            )
+            val cxDiag = (diag.normLeft + diag.normRight) / 2f
+            val cyDiag = (diag.normTop + diag.normBottom) / 2f
+            val centroDentro = cxDiag in base.normLeft..base.normRight &&
+                    cyDiag in base.normTop..base.normBottom
+
+            if (iou >= iouMinimo || centroDentro) {
+                val pontuacao = iou + if (centroDentro) 0.15f else 0f
+                if (pontuacao > melhorScore) {
+                    melhorScore = pontuacao
+                    melhorIdx = i
+                }
+            }
+        }
+
+        if (melhorIdx >= 0) {
+            pareadosDoenca.add(melhorIdx)
+            val diag = deteccoesDoenca[melhorIdx]
+            resultado.add(
+                base.copy(
+                    estado = diag.estado,
+                    label = diag.label,
+                    confianca = maxOf(base.confianca, diag.confianca)
+                )
+            )
+        } else {
+            resultado.add(
+                base.copy(
+                    estado = EstadoFruto.SADIO,
+                    label = "Sadio"
+                )
+            )
+        }
+    }
+
+    for (i in deteccoesDoenca.indices) {
+        if (i in pareadosDoenca) continue
+        val diag = deteccoesDoenca[i]
+        if (diag.estado == EstadoFruto.SADIO || diag.confianca < 0.45f) continue
+
+        val cxDiag = (diag.normLeft + diag.normRight) / 2f
+        val cyDiag = (diag.normTop + diag.normBottom) / 2f
+        val colideComContagem = caixasContagem.any { base ->
+            val iou = iouCaixasNorm(
+                base.normLeft, base.normTop, base.normRight, base.normBottom,
+                diag.normLeft, diag.normTop, diag.normRight, diag.normBottom
+            )
+            val centroDentro = cxDiag in base.normLeft..base.normRight &&
+                    cyDiag in base.normTop..base.normBottom
+            iou >= 0.20f || centroDentro
+        }
+        if (!colideComContagem) {
+            resultado.add(diag)
+        }
+    }
+
+    return resultado
+}
+
 /**
  * Tela de Revisão Pós-Captura / Pós-Processamento:
  * - Exibe a foto capturada com as caixas de detecção da IA sobrepostas;
@@ -289,6 +368,7 @@ fun TelaRevisaoCaptura(
     bitmapWidthRef: Float,
     bitmapHeightRef: Float,
     detectorHelper: ObjectDetectorHelper? = null,
+    detectorSecundarioHelper: ObjectDetectorHelper? = null,
     labelsFiltro: List<String> = listOf("cacau", "fruto"),
     caixasAuditadasIniciais: List<CaixaAuditavel>? = null,
     onConfirmar: (
@@ -388,7 +468,7 @@ fun TelaRevisaoCaptura(
                     val bmpW = bmp.width.toFloat()
                     val bmpH = bmp.height.toFloat()
 
-                    val candidatasEstaticas = mutableListOf<DetEstilizada>()
+                    val candidatasContagem = mutableListOf<DetEstilizada>()
                     res.deteccoes.forEach { det ->
                         val cat = det.categories.firstOrNull()
                         val label = (cat?.label ?: "cacau").lowercase()
@@ -405,7 +485,7 @@ fun TelaRevisaoCaptura(
 
                         val rotuloBruto = cat?.label?.takeIf { it.isNotBlank() } ?: "Sadio"
                         val estadoDet = mapearLabelParaEstadoFruto(rotuloBruto)
-                        candidatasEstaticas.add(
+                        candidatasContagem.add(
                             DetEstilizada(
                                 normLeft = nL,
                                 normTop = nT,
@@ -416,6 +496,27 @@ fun TelaRevisaoCaptura(
                                 label = rotuloBruto
                             )
                         )
+                    }
+
+                    val candidatasEstaticas = if (detectorSecundarioHelper != null) {
+                        val resSec = detectorSecundarioHelper.detectarSincrono(bmp)
+                        val candidatasDoenca = resSec?.deteccoes?.mapNotNull { det ->
+                            val cat = det.categories.firstOrNull() ?: return@mapNotNull null
+                            val r = det.boundingBox
+                            val rotuloSec = cat.label.takeIf { it.isNotBlank() } ?: "Sadio"
+                            DetEstilizada(
+                                normLeft = (r.left / bmpW).coerceIn(0f, 1f),
+                                normTop = (r.top / bmpH).coerceIn(0f, 1f),
+                                normRight = (r.right / bmpW).coerceIn(0f, 1f),
+                                normBottom = (r.bottom / bmpH).coerceIn(0f, 1f),
+                                confianca = cat.score,
+                                estado = mapearLabelParaEstadoFruto(rotuloSec),
+                                label = rotuloSec
+                            )
+                        } ?: emptyList()
+                        fundirContagemEDiagnosticoIoU(candidatasContagem, candidatasDoenca)
+                    } else {
+                        candidatasContagem
                     }
 
                     withContext(Dispatchers.Main) {
@@ -918,16 +1019,22 @@ private fun ChipResumo(rotulo: String, total: Int, cor: Color) {
     }
 }
 
-internal fun iouNorm(c: CaixaAuditavel, l: Float, t: Float, r: Float, b: Float): Float {
-    val interL = maxOf(c.normLeft, l)
-    val interT = maxOf(c.normTop, t)
-    val interR = minOf(c.normRight, r)
-    val interB = minOf(c.normBottom, b)
+internal fun iouNorm(c: CaixaAuditavel, l: Float, t: Float, r: Float, b: Float): Float =
+    iouCaixasNorm(c.normLeft, c.normTop, c.normRight, c.normBottom, l, t, r, b)
+
+internal fun iouCaixasNorm(
+    l1: Float, t1: Float, r1: Float, b1: Float,
+    l2: Float, t2: Float, r2: Float, b2: Float
+): Float {
+    val interL = maxOf(l1, l2)
+    val interT = maxOf(t1, t2)
+    val interR = minOf(r1, r2)
+    val interB = minOf(b1, b2)
     val w = maxOf(0f, interR - interL)
     val h = maxOf(0f, interB - interT)
     val inter = w * h
-    val area1 = (c.normRight - c.normLeft) * (c.normBottom - c.normTop)
-    val area2 = (r - l) * (b - t)
+    val area1 = maxOf(0f, r1 - l1) * maxOf(0f, b1 - t1)
+    val area2 = maxOf(0f, r2 - l2) * maxOf(0f, b2 - t2)
     val union = area1 + area2 - inter
     return if (union <= 0f) 0f else inter / union
 }

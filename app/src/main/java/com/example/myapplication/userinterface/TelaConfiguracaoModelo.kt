@@ -42,6 +42,7 @@ fun TelaConfiguracaoModelo(
     var labelsTexto by remember { mutableStateOf(configAtual.labelsFiltro.joinToString(", ")) }
     var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).toInt().toString()) }
     var maxResultados by remember { mutableStateOf(configAtual.maxResultados) }
+    var usarDiagnosticoSecundario by remember { mutableStateOf(configAtual.usarDiagnosticoSecundario) }
 
     var novoLabel by remember { mutableStateOf("") }
 
@@ -87,6 +88,61 @@ fun TelaConfiguracaoModelo(
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
 
+            // ── SEÇÃO 0: MODO DUPLO (CONTAR + DIAGNOSTICAR) ──
+            item {
+                SectionHeader(icon = Icons.Default.AutoAwesome, title = "Pipeline Duplo (Contagem + Doenças)")
+            }
+
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = if (usarDiagnosticoSecundario) 2.dp else 1.dp,
+                            color = if (usarDiagnosticoSecundario) verde else Color.LightGray,
+                            shape = RoundedCornerShape(12.dp)
+                        ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (usarDiagnosticoSecundario) Color(0xFFE8F5E9) else Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Contar + Diagnosticar Doenças (2 IAs)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF1B5E20)
+                            )
+                            Text(
+                                "Usa detector.tflite no preview (rápido, alto recall de frutos) e executa detector_doenca.tflite pós-foto para classificar Sadio, Vassoura, Podridão e Monilíase sem perder contagem.",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Switch(
+                            checked = usarDiagnosticoSecundario,
+                            onCheckedChange = {
+                                usarDiagnosticoSecundario = it
+                                if (it) {
+                                    modeloExternoUri = null
+                                    modeloExternoNome = ""
+                                    labelsTexto = (com.example.myapplication.data.LABELS_DOENCA_CACAU + listOf("cacau", "fruto"))
+                                        .joinToString(", ")
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
             // ── SEÇÃO 1: MODELOS EMBUTIDOS ──
             item {
                 SectionHeader(icon = Icons.Default.Memory, title = "Modelos Embutidos no App")
@@ -101,6 +157,7 @@ fun TelaConfiguracaoModelo(
                         modeloSelecionado = modelo
                         modeloExternoUri = null
                         modeloExternoNome = ""
+                        usarDiagnosticoSecundario = false
                         // Preenche os labels padrão do modelo
                         labelsTexto = modelo.labelsDefault.joinToString(", ")
                     }
@@ -333,7 +390,9 @@ fun TelaConfiguracaoModelo(
                                 modeloExternoNome = modeloExternoNome,
                                 labelsFiltro = listaLabels,
                                 threshold = threshold,
-                                maxResultados = maxResultados
+                                maxResultados = maxResultados,
+                                usarDiagnosticoSecundario = usarDiagnosticoSecundario && modeloExternoUri == null,
+                                modeloSecundarioArquivo = configAtual.modeloSecundarioArquivo
                             )
                         )
                     },

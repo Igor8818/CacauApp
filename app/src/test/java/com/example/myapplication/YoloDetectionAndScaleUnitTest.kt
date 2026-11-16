@@ -222,6 +222,33 @@ class YoloDetectionAndScaleUnitTest {
         assertEquals("VassouraBruxa", fundidas[1].label)
     }
 
+    @Test
+    fun testFundirContagemEDiagnosticoIoU_PreservesCountAndAssignsDisease() {
+        val contagem = listOf(
+            com.example.myapplication.userinterface.DetEstilizada(0.10f, 0.10f, 0.30f, 0.40f, 0.90f, com.example.myapplication.userinterface.EstadoFruto.SADIO, "cacau"),
+            com.example.myapplication.userinterface.DetEstilizada(0.45f, 0.20f, 0.65f, 0.50f, 0.85f, com.example.myapplication.userinterface.EstadoFruto.SADIO, "cacau"),
+            com.example.myapplication.userinterface.DetEstilizada(0.75f, 0.15f, 0.92f, 0.45f, 0.82f, com.example.myapplication.userinterface.EstadoFruto.SADIO, "cacau")
+        )
+        val doenca = listOf(
+            // Sobreposição forte com o fruto 1 -> VassouraBruxa
+            com.example.myapplication.userinterface.DetEstilizada(0.11f, 0.11f, 0.29f, 0.39f, 0.78f, com.example.myapplication.userinterface.EstadoFruto.VASSOURA, "VassouraBruxa"),
+            // Sobreposição forte com o fruto 2 -> PodridaoParda
+            com.example.myapplication.userinterface.DetEstilizada(0.46f, 0.21f, 0.64f, 0.49f, 0.81f, com.example.myapplication.userinterface.EstadoFruto.PODRIDAO, "PodridaoParda"),
+            // Fruto doente isolado não detectado pelo contador (alta confiança)
+            com.example.myapplication.userinterface.DetEstilizada(0.15f, 0.60f, 0.35f, 0.85f, 0.66f, com.example.myapplication.userinterface.EstadoFruto.VASSOURA, "VassouraBruxa")
+        )
+
+        val fundidas = com.example.myapplication.userinterface.fundirContagemEDiagnosticoIoU(contagem, doenca)
+
+        assertEquals(4, fundidas.size)
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.VASSOURA, fundidas[0].estado)
+        assertEquals("VassouraBruxa", fundidas[0].label)
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.PODRIDAO, fundidas[1].estado)
+        assertEquals("PodridaoParda", fundidas[1].label)
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.SADIO, fundidas[2].estado)
+        assertEquals(com.example.myapplication.userinterface.EstadoFruto.VASSOURA, fundidas[3].estado)
+    }
+
     private fun nms(boxes: List<FloatArray>, iouThresh: Float = 0.45f): List<FloatArray> {
         val sorted = boxes.sortedByDescending { it[4] }.toMutableList()
         val result = mutableListOf<FloatArray>()

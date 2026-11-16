@@ -237,6 +237,8 @@ object PersistenciaLocalRegistros {
     private const val KEY_THRESHOLD = "threshold"
     private const val KEY_MAX_RESULTADOS = "max_resultados"
     private const val KEY_LABELS = "labels_filtro"
+    private const val KEY_USAR_DIAG_SECUNDARIO = "usar_diag_secundario"
+    private const val KEY_MODELO_SECUNDARIO = "modelo_secundario_arquivo"
 
     fun salvarConfiguracaoModelo(context: Context, config: ModelConfig) {
         try {
@@ -252,6 +254,8 @@ object PersistenciaLocalRegistros {
                 .putFloat(KEY_THRESHOLD, config.threshold)
                 .putInt(KEY_MAX_RESULTADOS, config.maxResultados)
                 .putString(KEY_LABELS, labelsJson)
+                .putBoolean(KEY_USAR_DIAG_SECUNDARIO, config.usarDiagnosticoSecundario)
+                .putString(KEY_MODELO_SECUNDARIO, config.modeloSecundarioArquivo)
                 .apply()
         } catch (e: Exception) {
             Log.e("PersistenciaLocal", "Erro ao salvar configuracao do modelo: ${e.message}")
@@ -311,6 +315,10 @@ object PersistenciaLocalRegistros {
             val externoUri = if (!externoUriStr.isNullOrBlank()) {
                 safeParseUri(externoUriStr)
             } else null
+            val usarDiagSecundario = prefs.getBoolean(KEY_USAR_DIAG_SECUNDARIO, true)
+            val modeloSecundario = prefs.getString(KEY_MODELO_SECUNDARIO, "detector_doenca.tflite")
+                ?.takeIf { it.isNotBlank() }
+                ?: "detector_doenca.tflite"
 
             ModelConfig(
                 modeloSelecionado = modeloEmbutido,
@@ -318,7 +326,9 @@ object PersistenciaLocalRegistros {
                 modeloExternoNome = externoNome,
                 labelsFiltro = labelsEfetivas,
                 threshold = threshold,
-                maxResultados = maxResultados
+                maxResultados = maxResultados,
+                usarDiagnosticoSecundario = usarDiagSecundario,
+                modeloSecundarioArquivo = modeloSecundario
             )
         } catch (e: Exception) {
             Log.e("PersistenciaLocal", "Erro ao carregar configuracao do modelo: ${e.message}")

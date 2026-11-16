@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/Android-SDK%2024%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android SDK 24+" />
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
   <img src="https://img.shields.io/badge/TensorFlow%20Lite-YOLOv8-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow Lite" />
-  <img src="https://img.shields.io/badge/Tests-32%20Passed-25A162?style=for-the-badge&logo=junit5&logoColor=white" alt="32 Unit Tests Passing" />
+  <img src="https://img.shields.io/badge/Tests-33%20Passed-25A162?style=for-the-badge&logo=junit5&logoColor=white" alt="33 Unit Tests Passing" />
   <img src="https://img.shields.io/badge/CEPEC%20%2F%20CEPLAC-Pesquisa%20Agron%C3%B4mica-2E7D32?style=for-the-badge" alt="CEPEC / CEPLAC" />
 </p>
 
@@ -54,9 +54,9 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 
 ## ✨ Funcionalidades Principais
 
-* **⚡ Dois Modelos YOLOv8 Embutidos + Refinamento Morfológico Pós-NMS:**
-  * `detector_doenca.tflite` (**Cacau Doenças CEPEC**): Inferência multi-classe para *Podridão Parda*, *Monilíase*, *Sadio* e *Vassoura de Bruxa*, combinada com `refinarClasseDoencaPorMorfologiaCor` pós-NMS para distinguir frutos vassourados secos/acinzentados de podridão parda em tecidos amarelados/marrons.
-  * `detector.tflite` (**Cacau Contagem CEPEC**): Modelo clássico otimizado para contagem geral de frutos.
+* **⚡ Pipeline Duplo (Contagem + Diagnóstico CEPEC) & Dois Modelos YOLOv8 Embutidos:**
+  * `Modo Combinado`: Executa `detector.tflite` para contagem no preview e aplica `detector_doenca.tflite` + `refinarClasseDoencaPorMorfologiaCor` na revisão pós-foto (*Human-in-the-Loop*) para distinguir frutos vassourados necrosados, podridão parda, monilíase e sadios sem perder detecções.
+  * `detector_doenca.tflite` (**Cacau Doenças CEPEC**) & `detector.tflite` (**Cacau Contagem CEPEC**) também podem ser selecionados individualmente na configuração do modelo.
   * Suporte a modelos externos `.tflite`, pré-processamento por **Letterbox isomórfico (`640x640`)**, aceleração multithread em CPU + GPU Delegate e re-inferência estática pós-captura para **snap geométrico** exato sobre a foto estática.
 * **🔍 Tela de Revisão Pós-Captura em Tela Cheia (*Human-in-the-Loop*):**
   * Toque inteligente selecionando o centro do fruto mais próximo em cachos densos para classificar:
@@ -81,7 +81,7 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 | **Câmera & Visão Computacional** | CameraX `1.5.3`, TensorFlow Lite `2.16.1` (+ GPU Delegate), YOLOv8 (`640x640` Float32) |
 | **Rede & Sincronização** | OkHttp `4.12.0`, JSON nativo Android, Network Security Config |
 | **Geolocalização & Hardware** | Google Play Services Location `21.2.0` (`FusedLocationProviderClient`), ExifInterface |
-| **Qualidade & CI** | JUnit 4 (**32 testes unitários**), Mockito `5.11.0`, GitHub Actions CI |
+| **Qualidade & CI** | JUnit 4 (**33 testes unitários**), Mockito `5.11.0`, GitHub Actions CI |
 
 ---
 
@@ -114,8 +114,8 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-### Suíte de Testes Unitários (**32 Testes Passing**)
-* `CsvParsingUnitTest` (4) • `DomainConcordanceIntegrationTest` (4) • `LetterboxAndGeometryUnitTest` (9) • `ModelAndStateUnitTest` (8) • `YoloDetectionAndScaleUnitTest` (7).
+### Suíte de Testes Unitários (**33 Testes Passing**)
+* `CsvParsingUnitTest` (4) • `DomainConcordanceIntegrationTest` (4) • `LetterboxAndGeometryUnitTest` (9) • `ModelAndStateUnitTest` (8) • `YoloDetectionAndScaleUnitTest` (8).
 
 ---
 

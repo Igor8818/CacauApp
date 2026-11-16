@@ -674,6 +674,7 @@ class ObjectDetectorHelper(
             var bSum = 0f
             var satSum = 0f
             var valSum = 0f
+            var darkMatteCount = 0
             var count = 0
 
             val stepY = ((endY - startY) / 24).coerceAtLeast(1)
@@ -691,6 +692,10 @@ class ObjectDetectorHelper(
                     val cmax = maxOf(r, g, b)
                     val cmin = minOf(r, g, b)
                     val sat = if (cmax > 0.001f) (cmax - cmin) / cmax else 0f
+                    val rb = r - b
+                    if (cmax < 0.42f || (cmax < 0.58f && sat < 0.38f && rb < 0.22f)) {
+                        darkMatteCount++
+                    }
                     rSum += r
                     gSum += g
                     bSum += b
@@ -708,12 +713,18 @@ class ObjectDetectorHelper(
             val satMean = satSum / count
             val valMean = valSum / count
             val rbDiff = rMean - bMean
+            val darkMatteRatio = darkMatteCount.toFloat() / count.toFloat()
 
             return if (classIdx == 0) {
-                if (rbDiff < 0.145f && satMean < 0.265f && valMean < 0.68f) 3 else 0
+                val isColdGrayDry = rbDiff < 0.145f && satMean < 0.265f && valMean < 0.68f
+                val isDarkBrownDry = valMean < 0.46f && satMean < 0.45f && rbDiff < 0.24f
+                val isPredominantlyNecroticMatte = darkMatteRatio >= 0.45f && valMean < 0.62f && rbDiff < 0.22f
+                if (isColdGrayDry || isDarkBrownDry || isPredominantlyNecroticMatte) 3 else 0
             } else {
                 // classIdx == 2 (Sadio moderado) mas com ativação simultânea de doença em fruto seco/escuro
-                if (rbDiff < 0.10f && satMean < 0.20f && valMean < 0.58f) 3 else classIdx
+                if ((rbDiff < 0.10f && satMean < 0.20f && valMean < 0.58f) ||
+                    (darkMatteRatio >= 0.55f && valMean < 0.52f && rbDiff < 0.18f)
+                ) 3 else classIdx
             }
         }
     }

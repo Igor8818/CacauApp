@@ -51,6 +51,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 
+import com.example.myapplication.data.LABELS_DOENCA_CACAU
 import com.example.myapplication.data.ModelConfig
 import com.example.myapplication.userinterface.CaixaAuditavel
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
@@ -66,6 +67,48 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.example.myapplication.userinterface.TelaRevisaoCaptura
 import com.example.myapplication.userinterface.util.*
 import org.tensorflow.lite.task.vision.detector.Detection
+
+private fun criarParDetectoresCacau(
+    context: Context,
+    modelConfig: ModelConfig
+): Pair<ObjectDetectorHelper, ObjectDetectorHelper?> {
+    if (modelConfig.usarDiagnosticoSecundario && modelConfig.modeloExternoUri == null) {
+        val primarioContagem = ObjectDetectorHelper(
+            context = context,
+            detectorListener = null,
+            modelSource = ObjectDetectorHelper.ModelSource.Asset("detector.tflite"),
+            scoreThreshold = modelConfig.threshold,
+            maxResults = modelConfig.maxResultados,
+            customLabels = listOf("cacau", "fruto")
+        )
+        val secundarioDoenca = ObjectDetectorHelper(
+            context = context,
+            detectorListener = null,
+            modelSource = ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSecundarioArquivo),
+            scoreThreshold = modelConfig.threshold,
+            maxResults = modelConfig.maxResultados,
+            customLabels = LABELS_DOENCA_CACAU
+        )
+        return primarioContagem to secundarioDoenca
+    }
+
+    val source = when {
+        modelConfig.modeloExternoUri != null ->
+            ObjectDetectorHelper.ModelSource.External(modelConfig.modeloExternoUri, modelConfig.modeloExternoNome)
+        modelConfig.modeloSelecionado != null ->
+            ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSelecionado.nomeArquivo)
+        else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
+    }
+    val unico = ObjectDetectorHelper(
+        context = context,
+        detectorListener = null,
+        modelSource = source,
+        scoreThreshold = modelConfig.threshold,
+        maxResults = modelConfig.maxResultados,
+        customLabels = modelConfig.labelsFiltro
+    )
+    return unico to null
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -234,28 +277,14 @@ fun AppCacauCEPEC() {
     when {
         registroParaEdicao != null -> {
             val reg = registroParaEdicao!!
-            val detectorHelperRevisao = remember(modelConfig) {
-                val cfg = modelConfig
-                val extUri = cfg.modeloExternoUri
-                val emb = cfg.modeloSelecionado
-                val source = when {
-                    extUri != null ->
-                        ObjectDetectorHelper.ModelSource.External(extUri, cfg.modeloExternoNome)
-                    emb != null ->
-                        ObjectDetectorHelper.ModelSource.Asset(emb.nomeArquivo)
-                    else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
-                }
-                ObjectDetectorHelper(
-                    context = context,
-                    detectorListener = null,
-                    modelSource = source,
-                    scoreThreshold = cfg.threshold,
-                    maxResults = cfg.maxResultados,
-                    customLabels = cfg.labelsFiltro
-                )
+            val (detectorHelperRevisao, detectorSecundarioRevisao) = remember(modelConfig) {
+                criarParDetectoresCacau(context, modelConfig)
             }
-            DisposableEffect(detectorHelperRevisao) {
-                onDispose { detectorHelperRevisao.fechar() }
+            DisposableEffect(detectorHelperRevisao, detectorSecundarioRevisao) {
+                onDispose {
+                    detectorHelperRevisao.fechar()
+                    detectorSecundarioRevisao?.fechar()
+                }
             }
 
             TelaRevisaoCaptura(
@@ -265,6 +294,7 @@ fun AppCacauCEPEC() {
                 bitmapWidthRef = 1f,
                 bitmapHeightRef = 1f,
                 detectorHelper = detectorHelperRevisao,
+                detectorSecundarioHelper = detectorSecundarioRevisao,
                 labelsFiltro = modelConfig.labelsFiltro,
                 caixasAuditadasIniciais = reg.caixas,
                 onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixasNovas ->
@@ -408,6 +438,15 @@ fun AppCacauCEPEC() {
                             plantaNum = valorNumVariavel3, onPlantaNumChange = { valorNumVariavel3 = it },
                             plantaTxt = valorTxtVariavel3, onPlantaTxtChange = { valorTxtVariavel3 = it },
                             modelConfig = modelConfig,
+                            onToggleModoDuplo = { ativo ->
+                                val atualizado = modelConfig.copy(
+                                    usarDiagnosticoSecundario = ativo,
+                                    modeloExternoUri = if (ativo) null else modelConfig.modeloExternoUri,
+                                    modeloExternoNome = if (ativo) "" else modelConfig.modeloExternoNome
+                                )
+                                modelConfig = atualizado
+                                PersistenciaLocalRegistros.salvarConfiguracaoModelo(context, atualizado)
+                            },
                             onModoImersivoChange = { modoImersivoAtivo = it },
                             onSave = { uri, diagnostico, total, sadios, vassoura, podridao, naoAvail, caixas ->
                                 val data = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT).format(Date())
@@ -442,6 +481,15 @@ fun AppCacauCEPEC() {
                             ensaio = ensaioNome,
                             rotaCompleta = rotaPreCarregada,
                             modelConfig = modelConfig,
+                            onToggleModoDuplo = { ativo ->
+                                val atualizado = modelConfig.copy(
+                                    usarDiagnosticoSecundario = ativo,
+                                    modeloExternoUri = if (ativo) null else modelConfig.modeloExternoUri,
+                                    modeloExternoNome = if (ativo) "" else modelConfig.modeloExternoNome
+                                )
+                                modelConfig = atualizado
+                                PersistenciaLocalRegistros.salvarConfiguracaoModelo(context, atualizado)
+                            },
                             onCarregarPlanilhaClick = { launcherArquivoCSV.launch("*/*") },
                             onLimparRotaClick = {
                                 rotaPreCarregada.clear()
@@ -570,6 +618,7 @@ fun TelaPrincipalCapturaOtimizada(
     plantaNum: Int, onPlantaNumChange: (Int) -> Unit,
     plantaTxt: String, onPlantaTxtChange: (String) -> Unit,
     modelConfig: ModelConfig,
+    onToggleModoDuplo: (Boolean) -> Unit = {},
     onModoImersivoChange: (Boolean) -> Unit = {},
     onSave: (Uri, String, Int, Int, Int, Int, Int, List<CaixaAuditavel>) -> Unit
 ) {
@@ -618,27 +667,16 @@ fun TelaPrincipalCapturaOtimizada(
         }
     }
 
-    // Recria o detector quando a config de modelo mudar
-    val detectorHelper = remember(modelConfig) {
-        val source = when {
-            modelConfig.modeloExternoUri != null ->
-                ObjectDetectorHelper.ModelSource.External(modelConfig.modeloExternoUri, modelConfig.modeloExternoNome)
-            modelConfig.modeloSelecionado != null ->
-                ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSelecionado.nomeArquivo)
-            else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
-        }
-        ObjectDetectorHelper(
-            context = context,
-            detectorListener = null,
-            modelSource = source,
-            scoreThreshold = modelConfig.threshold,
-            maxResults = modelConfig.maxResultados,
-            customLabels = modelConfig.labelsFiltro
-        )
+    // Recria os detectores quando a config de modelo mudar
+    val (detectorHelper, detectorSecundarioHelper) = remember(modelConfig) {
+        criarParDetectoresCacau(context, modelConfig)
     }
 
-    DisposableEffect(detectorHelper) {
-        onDispose { detectorHelper.fechar() }
+    DisposableEffect(detectorHelper, detectorSecundarioHelper) {
+        onDispose {
+            detectorHelper.fechar()
+            detectorSecundarioHelper?.fechar()
+        }
     }
 
     val isCloneValido = cloneVal.isNotBlank() &&
@@ -653,6 +691,7 @@ fun TelaPrincipalCapturaOtimizada(
             bitmapWidthRef = bitmapWidthCapturado,
             bitmapHeightRef = bitmapHeightCapturado,
             detectorHelper = detectorHelper,
+            detectorSecundarioHelper = detectorSecundarioHelper,
             labelsFiltro = modelConfig.labelsFiltro,
             onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                 onSave(fotoParaRevisao!!, diag, total, sadios, vassoura, podridao, naoAvail, caixas)
@@ -672,35 +711,8 @@ fun TelaPrincipalCapturaOtimizada(
                 }
             }
 
-            // Badge do modelo ativo (compacto e sem quebra vertical)
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = Color(0xFFE8F5E9),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.SmartToy, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = buildString {
-                            append(modelConfig.nomeExibicao)
-                            append(" • ${(modelConfig.threshold * 100).toInt()}%")
-                            if (modelConfig.labelsFiltro.isNotEmpty()) {
-                                append(" (${modelConfig.labelsFiltro.take(3).joinToString(", ")}${if (modelConfig.labelsFiltro.size > 3) "…" else ""})")
-                            }
-                        },
-                        fontSize = 12.sp,
-                        color = Color(0xFF2E7D32),
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
+            // Badge do modelo ativo + chip rápido de Modo Duplo (Contar + Doença)
+            BarraStatusModeloCacau(modelConfig = modelConfig, onToggleModoDuplo = onToggleModoDuplo)
 
             Spacer(Modifier.height(16.dp))
 
@@ -983,6 +995,53 @@ fun TelaPrincipalCapturaOtimizada(
     }
 }
 
+@Composable
+private fun BarraStatusModeloCacau(
+    modelConfig: ModelConfig,
+    onToggleModoDuplo: (Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFFE8F5E9),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.SmartToy, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "${modelConfig.nomeExibicao} • ${(modelConfig.threshold * 100).toInt()}%",
+                fontSize = 12.sp,
+                color = Color(0xFF2E7D32),
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            FilterChip(
+                selected = modelConfig.usarDiagnosticoSecundario,
+                onClick = { onToggleModoDuplo(!modelConfig.usarDiagnosticoSecundario) },
+                label = {
+                    Text(
+                        if (modelConfig.usarDiagnosticoSecundario) "2 IA: Contar+Doença" else "1 IA: Único",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                },
+                modifier = Modifier.height(28.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Color(0xFF2E7D32),
+                    selectedLabelColor = Color.White
+                )
+            )
+        }
+    }
+}
+
 // ════════════════════════════════════════════════════
 // MODO ROTA — recebe modelConfig
 // ════════════════════════════════════════════════════
@@ -991,6 +1050,7 @@ fun TelaModoFieldBook(
     ensaio: String,
     rotaCompleta: List<RotaColeta>,
     modelConfig: ModelConfig,
+    onToggleModoDuplo: (Boolean) -> Unit = {},
     onCarregarPlanilhaClick: () -> Unit,
     onLimparRotaClick: () -> Unit,
     onRotaRecebidaDoPc: (List<RotaColeta>) -> Unit = {},
@@ -1071,26 +1131,15 @@ fun TelaModoFieldBook(
         }
     }
 
-    val detectorHelper = remember(modelConfig) {
-        val source = when {
-            modelConfig.modeloExternoUri != null ->
-                ObjectDetectorHelper.ModelSource.External(modelConfig.modeloExternoUri, modelConfig.modeloExternoNome)
-            modelConfig.modeloSelecionado != null ->
-                ObjectDetectorHelper.ModelSource.Asset(modelConfig.modeloSelecionado.nomeArquivo)
-            else -> ObjectDetectorHelper.ModelSource.Asset("detector_doenca.tflite")
-        }
-        ObjectDetectorHelper(
-            context = context,
-            detectorListener = null,
-            modelSource = source,
-            scoreThreshold = modelConfig.threshold,
-            maxResults = modelConfig.maxResultados,
-            customLabels = modelConfig.labelsFiltro
-        )
+    val (detectorHelper, detectorSecundarioHelper) = remember(modelConfig) {
+        criarParDetectoresCacau(context, modelConfig)
     }
 
-    DisposableEffect(detectorHelper) {
-        onDispose { detectorHelper.fechar() }
+    DisposableEffect(detectorHelper, detectorSecundarioHelper) {
+        onDispose {
+            detectorHelper.fechar()
+            detectorSecundarioHelper?.fechar()
+        }
     }
 
     if (rotaCompleta.isEmpty()) {
@@ -1146,6 +1195,7 @@ fun TelaModoFieldBook(
                 bitmapWidthRef = bitmapWidthCapturado,
                 bitmapHeightRef = bitmapHeightCapturado,
                 detectorHelper = detectorHelper,
+                detectorSecundarioHelper = detectorSecundarioHelper,
                 labelsFiltro = modelConfig.labelsFiltro,
                 onConfirmar = { diag, total, sadios, vassoura, podridao, naoAvail, caixas ->
                     pontoAtual.coletado = true
@@ -1178,14 +1228,8 @@ fun TelaModoFieldBook(
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Badge modelo
-                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFE8F5E9), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.SmartToy, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("${modelConfig.nomeExibicao} • ${(modelConfig.threshold * 100).toInt()}% conf.", fontSize = 12.sp, color = Color(0xFF2E7D32))
-                    }
-                }
+                // Badge modelo + chip modo duplo
+                BarraStatusModeloCacau(modelConfig = modelConfig, onToggleModoDuplo = onToggleModoDuplo)
 
                 Spacer(Modifier.height(12.dp))
                 Text("Ordem na Planilha: #$ordemExibicao  •  Planta ${indiceAtual + 1} de ${rotaCompleta.size}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
