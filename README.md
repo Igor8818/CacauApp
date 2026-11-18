@@ -2,7 +2,7 @@
   <img src="logo_cacauapp.jpg" alt="CacauApp Banner" width="100%" />
 </div>
 
-# 📱 CacauApp — Visão Computacional Embarcada & Auditoria Fenotípica Offline
+# 📱 CacauApp — Android Nativo Offline-First & Inferência YOLOv8 On-Device
 
 <p align="center">
   <a href="https://github.com/Igor8818/CacauApp/actions/workflows/android-ci.yml">
@@ -13,15 +13,12 @@
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
   <img src="https://img.shields.io/badge/TensorFlow%20Lite-YOLOv8-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow Lite" />
   <img src="https://img.shields.io/badge/Tests-33%20Passed-25A162?style=for-the-badge&logo=junit5&logoColor=white" alt="33 Unit Tests Passing" />
-  <img src="https://img.shields.io/badge/CEPEC%20%2F%20CEPLAC-Pesquisa%20Agron%C3%B4mica-2E7D32?style=for-the-badge" alt="CEPEC / CEPLAC" />
 </p>
 
-Aplicativo Android nativo de **Edge AI** (*on-device*) desenvolvido para o **Centro de Pesquisas do Cacau (CEPEC / CEPLAC)** em Ilhéus/Itabuna - BA.
+Aplicativo Android nativo **100% Offline-First** de **Visão Computacional On-Device**, projetado em **Kotlin 2.0 + Jetpack Compose + CameraX + TensorFlow Lite** para executar inferência em tempo real com **pipeline duplo de modelos YOLOv8**, revisão vetorial *Human-in-the-Loop* pós-captura e sincronização em lote resiliente em cenários críticos sem internet.
 
-O sistema opera **100% offline** em quadras experimentais de melhoramento genético (como o ensaio competitivo `TC-1801`), realizando a detecção, classificação fitossanitária multi-classe e contagem de frutos de cacau diretamente pela câmera do smartphone com modelos **YOLOv8 Float32** embarcados.
-
-> 🔗 **Ecossistema Completo:** Integra-se nativamente à [**CacauSync API**](https://github.com/Igor8818/CacauSync) (**Java 21 + Spring Boot 3 + React + PostgreSQL**).  
-> 🧬 **Versão Generalista Multi-Culturas:** Conheça também o [**BreedAI**](https://github.com/Igor8818/BreedAI), evolução *open-source* desacoplada deste motor para uso com planilhas `.xlsx`/`.csv`, variáveis dinâmicas e pacotes `.zip` de qualquer modelo TFLite.
+> 🔗 **Arquitetura Cliente-Servidor Completa:** Sincroniza de forma idempotente (via auto-descoberta HTTP/Wi-Fi `/24` ou túnel reverso **USB ADB**) com a [**CacauSync API**](https://github.com/Igor8818/CacauSync) (**Java 21 + Spring Boot 3 + React 18 + PostgreSQL**).  
+> 🧬 **Runtime Open-Source Desacoplado:** Conheça também o [**BreedAI**](https://github.com/Igor8818/BreedAI), evolução *open-source* (MIT) deste motor com leitura nativa de `.xlsx` e suporte plugável a qualquer modelo `.tflite`.
 
 ---
 
