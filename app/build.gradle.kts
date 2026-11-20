@@ -57,6 +57,7 @@ dependencies {
     // 2. CORREÇÃO: Usamos a versão 2.16.1 que resolve o conflito de namespace
     // Ou adicionamos uma "exclusão" para evitar o erro que você recebeu
     implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.16.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

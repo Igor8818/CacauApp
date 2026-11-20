@@ -121,10 +121,64 @@ class ObjectDetectorHelper(
 
     private var loadedPath: String? = null
 
-    init {
-        synchronized(globalInferenceLock) {
-            setup()
+    private var gpuDelegateAtivo: org.tensorflow.lite.gpu.GpuDelegate? = null
+
+    /** Preferir GPU (com fallback automático para CPU/XNNPACK). */
+    var preferirGpu: Boolean = true
+
+    /** Tenta GPU (FP16) com aquecimento; valida e só mantém se rodar sem erro e mais rápido que ~600 ms. */
+    private fun criarInterpreterGpuOuCpu(file: File, threads: Int): Interpreter? {
+        if (!preferirGpu) return null
+        val prefs = context.getSharedPreferences("cacau_gpu_guard", Context.MODE_PRIVATE)
+        val chave = "gpu_${file.name}"
+        // Se a tentativa anterior morreu (crash nativo) ou foi lenta/inválida, nunca mais tenta neste modelo.
+        if (prefs.getString(chave, "") != "") return null
+        prefs.edit().putString(chave, "tentando").commit()
+        var interpGpu: Interpreter? = null
+        var delegate: org.tensorflow.lite.gpu.GpuDelegate? = null
+        return try {
+            val resultado = naThreadInferencia {
+                val compat = org.tensorflow.lite.gpu.CompatibilityList()
+                val gOpts = if (compat.isDelegateSupportedOnThisDevice) {
+                    compat.bestOptionsForThisDevice
+                } else {
+                    org.tensorflow.lite.gpu.GpuDelegate.Options()
+                }.apply { setPrecisionLossAllowed(true) }
+                val d = org.tensorflow.lite.gpu.GpuDelegate(gOpts)
+                delegate = d
+                val i = Interpreter(file, Interpreter.Options().apply { addDelegate(d) })
+                interpGpu = i
+                if (i.outputTensorCount != 1 || i.getInputTensor(0).dataType() != DataType.FLOAT32) {
+                    throw IllegalStateException("Modelo não elegível para GPU")
+                }
+                val inBuf = ByteBuffer.allocateDirect(i.getInputTensor(0).numBytes()).order(ByteOrder.nativeOrder())
+                val outBuf = ByteBuffer.allocateDirect(i.getOutputTensor(0).numBytes()).order(ByteOrder.nativeOrder())
+                i.run(inBuf, outBuf) // aquecimento (compila shaders)
+                inBuf.rewind(); outBuf.rewind()
+                val t0 = System.nanoTime()
+                i.run(inBuf, outBuf)
+                val ms = (System.nanoTime() - t0) / 1_000_000
+                Log.d("Detector", "GPU delegate ${file.name}: ${ms}ms/frame")
+                if (ms > 600) throw IllegalStateException("GPU lenta (${ms}ms)")
+                i
+            }
+            if (resultado != null) {
+                gpuDelegateAtivo = delegate
+                prefs.edit().remove(chave).commit()
+            }
+            resultado
+        } catch (t: Throwable) {
+            Log.w("Detector", "GPU indisponível, usando CPU (${t.message})")
+            prefs.edit().putString(chave, "falhou").commit()
+            val i = interpGpu
+            val d = delegate
+            runCatching { naThreadInferencia { i?.close(); d?.close() } }
+            null
         }
+    }
+
+    init {
+        // Carga do modelo é preguiçosa (1ª inferência, fora da UI thread): evita travar ao trocar de modelo.
     }
 
     fun setListener(l: DetectorListener?) {
@@ -150,11 +204,16 @@ class ObjectDetectorHelper(
 
     fun obterLabelsModelo(): List<String> = synchronized(lock) { modelLabels.toList() }
 
-    fun fechar() = synchronized(globalInferenceLock) {
-        synchronized(lock) {
-            isClosed = true
-            close()
-        }
+    fun fechar() {
+        // Nunca bloqueia a UI thread esperando inferência em andamento / liberação do delegate GPU.
+        Thread({
+            synchronized(globalInferenceLock) {
+                synchronized(lock) {
+                    isClosed = true
+                    close()
+                }
+            }
+        }, "cacau-detector-close").apply { isDaemon = true }.start()
     }
 
     private fun setup() {
@@ -165,19 +224,20 @@ class ObjectDetectorHelper(
 
         try {
             val idealThreads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
-            interpreter = try {
-                val opts = Interpreter.Options().apply {
-                    setNumThreads(idealThreads)
-                    setUseXNNPACK(true)
+            interpreter = criarInterpreterGpuOuCpu(file, idealThreads)
+                ?: try {
+                    val opts = Interpreter.Options().apply {
+                        setNumThreads(idealThreads)
+                        setUseXNNPACK(true)
+                    }
+                    naThreadInferencia { Interpreter(file, opts) }
+                } catch (t: Throwable) {
+                    Log.w("Detector", "Fallback sem XNNPACK (${t.message})")
+                    val fallbackOpts = Interpreter.Options().apply {
+                        setNumThreads(idealThreads)
+                    }
+                    naThreadInferencia { Interpreter(file, fallbackOpts) }
                 }
-                Interpreter(file, opts)
-            } catch (t: Throwable) {
-                Log.w("Detector", "Fallback sem XNNPACK (${t.message})")
-                val fallbackOpts = Interpreter.Options().apply {
-                    setNumThreads(idealThreads)
-                }
-                Interpreter(file, fallbackOpts)
-            }
 
             val inTensor = interpreter!!.getInputTensor(0)
             val inShape = inTensor.shape()
@@ -482,7 +542,7 @@ class ObjectDetectorHelper(
                 outputMap[ssdScoreIndex] = scores
                 outputMap[ssdCountIndex] = count
 
-                interp.runForMultipleInputsOutputs(arrayOf(buf), outputMap)
+                naThreadInferencia { interp.runForMultipleInputsOutputs(arrayOf(buf), outputMap) }
 
                 val numDetected = min(count[0].toInt(), maxDets).coerceAtLeast(0)
                 var activeScores = scores[0]
@@ -583,7 +643,7 @@ class ObjectDetectorHelper(
         fun execTarget(target: Any) {
             val count = interp.outputTensorCount
             if (count <= 1) {
-                interp.run(inputBuf, target)
+                naThreadInferencia { interp.run(inputBuf, target) }
             } else {
                 val outMap = HashMap<Int, Any>(count)
                 outMap[0] = target
@@ -600,7 +660,7 @@ class ObjectDetectorHelper(
                     val nb = interp.getOutputTensor(i).numBytes().coerceAtLeast(4)
                     outMap[i] = ByteBuffer.allocateDirect(nb).order(ByteOrder.nativeOrder())
                 }
-                interp.runForMultipleInputsOutputs(arrayOf(inputBuf), outMap)
+                naThreadInferencia { interp.runForMultipleInputsOutputs(arrayOf(inputBuf), outMap) }
             }
         }
 
@@ -743,8 +803,16 @@ class ObjectDetectorHelper(
 
     private fun close() {
         ssdAmbiguousShape2Pair = null
-        interpreter?.close()
+        val velho = interpreter
         interpreter = null
+        val delegadoVelho = gpuDelegateAtivo
+        gpuDelegateAtivo = null
+        if (velho != null || delegadoVelho != null) {
+            naThreadInferencia {
+                runCatching { velho?.close() }
+                runCatching { delegadoVelho?.close() }
+            }
+        }
         loadedPath = null
         quantByteLut = null
         letterboxBitmap?.recycle()
@@ -794,6 +862,21 @@ class ObjectDetectorHelper(
 
     companion object {
         internal val globalInferenceLock = Any()
+
+        /** Delegate GPU exige criar e executar na MESMA thread: tudo do TFLite roda nesta thread única. */
+        private val inferenceExecutor: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "cacau-tflite").apply { isDaemon = true }
+            }
+
+        internal fun <T> naThreadInferencia(bloco: () -> T): T {
+            if (Thread.currentThread().name == "cacau-tflite") return bloco()
+            return try {
+                inferenceExecutor.submit<T> { bloco() }.get()
+            } catch (e: java.util.concurrent.ExecutionException) {
+                throw e.cause ?: e
+            }
+        }
         private val FLOAT_NORM_LUT = FloatArray(256) { it / 255f }
         val DEFAULT_4CLASS_DOENCA_LABELS = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa")
 
