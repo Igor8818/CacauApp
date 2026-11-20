@@ -177,7 +177,8 @@ object CacauSyncClient {
         val urlSalva = prefs.getString("server_url", "") ?: ""
         val emailSalvo = (prefs.getString("user_email", "") ?: "").ifBlank { DEFAULT_EMAIL }
         val passSalva = (prefs.getString("user_pass", "") ?: "").ifBlank { DEFAULT_PASS }
-        val codigoEnsaio = (prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801")
+        val codigoEnsaio = ensaioPadrao.trim()
+            .ifBlank { prefs.getString("codigo_ensaio", "TC-1801") ?: "TC-1801" }
             .ifBlank { "TC-1801" }
 
         val urlDescoberta = descobrirServidorAutomaticamente(urlSalva) { msg -> onProgresso?.invoke(msg) }
@@ -636,7 +637,12 @@ object CacauSyncClient {
     private fun extrairMensagemErro(body: String, fallback: String): String {
         return try {
             val json = JSONObject(body)
-            json.optString("mensagem", json.optString("message", fallback))
+            val detail = json.optString("detail", "").trim()
+            val mensagem = json.optString("mensagem", "").trim()
+            val message = json.optString("message", "").trim()
+            val error = json.optString("error", "").trim()
+            val title = json.optString("title", "").trim()
+            listOf(detail, mensagem, message, error, title).firstOrNull { it.isNotEmpty() } ?: fallback
         } catch (e: Exception) {
             fallback
         }

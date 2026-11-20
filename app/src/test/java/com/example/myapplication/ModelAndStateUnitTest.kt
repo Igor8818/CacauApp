@@ -74,6 +74,19 @@ class ModelAndStateUnitTest {
     }
 
     @Test
+    fun testModeloContagemUmaClasse_naoHerdaRotuloDeDoenca() {
+        val label = com.example.myapplication.userinterface.util.ObjectDetectorHelper.resolverRotuloPorIndice(
+            classIdx = 0,
+            modelLabels = emptyList(),
+            customLabels = listOf("PodridaoParda", "Moniliase", "Sadio", "VassouraBruxa", "cacau", "fruto"),
+            yoloNumClasses = 1,
+            modelPath = "detector.tflite",
+            fallback = "cacau"
+        )
+        assertEquals(EstadoFruto.SADIO, com.example.myapplication.userinterface.mapearLabelParaEstadoFruto(label))
+    }
+
+    @Test
     fun testEstadoFruto_AllSanitaryClassesPresent() {
         val estados = EstadoFruto.entries.map { it.name }
         assertTrue(estados.contains("SADIO"))

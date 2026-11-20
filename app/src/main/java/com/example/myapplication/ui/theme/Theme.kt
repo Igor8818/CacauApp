@@ -1,58 +1,54 @@
 package com.example.myapplication.ui.theme
 
-import android.app.Activity
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+private val CacauLightColorScheme = lightColorScheme(
+    primary = CacauVerdeEscuro,
     onPrimary = Color.White,
+    primaryContainer = CacauVerdeClaro,
+    onPrimaryContainer = CacauVerdeEscuro,
+    secondary = CacauVerdeBotanico,
     onSecondary = Color.White,
+    secondaryContainer = CacauDouradoClaro,
+    onSecondaryContainer = Color(0xFF4A3200),
+    tertiary = CacauDourado,
     onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    background = CacauFundoSolar,
+    onBackground = CacauTextoPrincipal,
+    surface = CacauSuperficie,
+    onSurface = CacauTextoPrincipal,
+    surfaceVariant = CacauSuperficieVariant,
+    onSurfaceVariant = CacauTextoSecundario,
+    outline = CacauBordaSuave,
+    error = CacauPerigo,
+    onError = Color.White,
+    errorContainer = CacauPerigoClaro,
+    onErrorContainer = CacauPerigo
 )
 
+/**
+ * Tema botânico de alto contraste solar projetado para legibilidade sob luz forte no campo.
+ */
 @Composable
-fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+fun CacauTheme(
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = CacauLightColorScheme,
         typography = Typography,
         content = content
     )
+}
+
+@Composable
+fun MyApplicationTheme(
+    darkTheme: Boolean = false,
+    @Suppress("UNUSED_PARAMETER") dynamicColor: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    CacauTheme(darkTheme = darkTheme, content = content)
 }

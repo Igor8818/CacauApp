@@ -1,492 +1,602 @@
 package com.example.myapplication.userinterface
 
+import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.myapplication.data.ModelConfig
-import com.example.myapplication.data.ModelEmbutido
+import com.example.myapplication.data.LABELS_DOENCA_CACAU
 import com.example.myapplication.data.MODELOS_EMBUTIDOS
+import com.example.myapplication.data.ModelConfig
+import com.example.myapplication.data.ModoIACacau
+import com.example.myapplication.ui.theme.CacauBordaSuave
+import com.example.myapplication.ui.theme.CacauFundoSolar
+import com.example.myapplication.ui.theme.CacauInfo
+import com.example.myapplication.ui.theme.CacauInfoClaro
+import com.example.myapplication.ui.theme.CacauPerigo
+import com.example.myapplication.ui.theme.CacauTextoPrincipal
+import com.example.myapplication.ui.theme.CacauTextoSecundario
+import com.example.myapplication.ui.theme.CacauVerdeBotanico
+import com.example.myapplication.ui.theme.CacauVerdeClaro
+import com.example.myapplication.ui.theme.CacauVerdeEscuro
+import com.example.myapplication.userinterface.util.ImportadorPlanilhaUniversal
+import com.example.myapplication.userinterface.util.ObjectDetectorHelper
+import com.example.myapplication.userinterface.util.PersistenciaLocalRegistros
+import java.io.File
+import java.util.Locale
+import java.util.zip.ZipInputStream
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelaConfiguracaoModelo(
     configAtual: ModelConfig,
-    onSalvar: (ModelConfig) -> Unit,
-    onVoltar: () -> Unit
+    inferenciaMsAtual: Long = 0L,
+    onAtualizarConfig: (ModelConfig) -> Unit,
+    onTestarCamera: () -> Unit = {}
 ) {
-    // --- estados locais para edição ---
-    var modeloSelecionado by remember { mutableStateOf(configAtual.modeloSelecionado) }
-    var modeloExternoUri by remember { mutableStateOf(configAtual.modeloExternoUri) }
-    var modeloExternoNome by remember { mutableStateOf(configAtual.modeloExternoNome) }
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
 
-    var labelsTexto by remember { mutableStateOf(configAtual.labelsFiltro.joinToString(", ")) }
-    var thresholdTexto by remember { mutableStateOf((configAtual.threshold * 100).toInt().toString()) }
-    var maxResultados by remember { mutableStateOf(configAtual.maxResultados) }
-    var usarDiagnosticoSecundario by remember { mutableStateOf(configAtual.usarDiagnosticoSecundario) }
+    var mostrarDiagnostico by remember { mutableStateOf(false) }
+    var mostrarAvancado by remember { mutableStateOf(configAtual.usaModeloCustomizado) }
+    var feedbackImportacao by remember { mutableStateOf<String?>(null) }
+    var modelosImportados by remember { mutableStateOf(PersistenciaLocalRegistros.listarModelosImportados(context)) }
 
-    var novoLabel by remember { mutableStateOf("") }
-
-    val verde = Color(0xFF2E7D32)
-
-    val launcherModelo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let {
-            modeloExternoUri = it
-            modeloSelecionado = null // desseleciona embutido
-            // Tenta pegar o nome do arquivo
-            modeloExternoNome = it.lastPathSegment?.substringAfterLast("/") ?: "modelo_externo.tflite"
+    val launcherModelo = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val (novoCfg, msg) = importarModeloCustomizadoCacau(context, uri, configAtual)
+        feedbackImportacao = msg
+        modelosImportados = PersistenciaLocalRegistros.listarModelosImportados(context)
+        if (novoCfg != null) {
+            onAtualizarConfig(novoCfg)
+            Toast.makeText(context, "Modelo importado e ativado!", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Parse dos labels atuais como lista
-    val listaLabels = remember(labelsTexto) {
-        labelsTexto.split(",").map { it.trim() }.filter { it.isNotBlank() }
-    }
+    val modoEfetivo = configAtual.modoEfetivo
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Configurar Modelo de IA", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onVoltar) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = verde,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
-                )
-            )
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(CacauFundoSolar)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Cabeçalho com botão discreto de Diagnóstico & Sobre
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-
-            // ── SEÇÃO 0: MODO DUPLO (CONTAR + DIAGNOSTICAR) ──
-            item {
-                SectionHeader(icon = Icons.Default.AutoAwesome, title = "Pipeline Duplo (Contagem + Doenças)")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Inteligência Artificial • Cacau",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = CacauVerdeEscuro
+                )
+                Text(
+                    text = "Motores exclusivos CEPEC: detector.tflite + detector_doenca.tflite",
+                    fontSize = 12.sp,
+                    color = CacauTextoSecundario
+                )
             }
+            IconButton(onClick = { mostrarDiagnostico = true }) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = "Diagnóstico técnico e sobre",
+                    tint = CacauVerdeEscuro
+                )
+            }
+        }
 
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(
-                            width = if (usarDiagnosticoSecundario) 2.dp else 1.dp,
-                            color = if (usarDiagnosticoSecundario) verde else Color.LightGray,
-                            shape = RoundedCornerShape(12.dp)
-                        ),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (usarDiagnosticoSecundario) Color(0xFFE8F5E9) else Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+        // Botão de Teste ao Vivo na Câmera Fullscreen
+        Button(
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onTestarCamera()
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = CacauVerdeEscuro),
+            shape = RoundedCornerShape(14.dp),
+            contentPadding = PaddingValues(vertical = 13.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("TESTAR NA CÂMERA AO VIVO", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        }
+
+        if (configAtual.usaModeloCustomizado) {
+            Surface(
+                color = CacauInfoClaro,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CacauInfo.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Modelo customizado ativo:", fontSize = 11.sp, color = CacauInfo, fontWeight = FontWeight.Bold)
+                        Text(configAtual.nomeExibicao, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CacauTextoPrincipal)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            onAtualizarConfig(configAtual.comModoIA(ModoIACacau.COMBINADO_2_IAS))
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Usar 2 IAs CEPEC", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Estratégias com os 2 modelos oficiais de cacau
+        Text(
+            text = "Modo de Operação dos 2 Modelos CEPEC",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = CacauTextoPrincipal
+        )
+
+        ModoIACacau.entries.forEach { modo ->
+            val selecionado = !configAtual.usaModeloCustomizado && modoEfetivo == modo
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (selecionado) CacauVerdeClaro else Color.White
+                ),
+                border = BorderStroke(
+                    width = if (selecionado) 2.dp else 1.dp,
+                    color = if (selecionado) CacauVerdeEscuro else CacauBordaSuave
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onAtualizarConfig(configAtual.comModoIA(modo))
+                    }
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = if (selecionado) Icons.Default.CheckCircle else Icons.Default.Psychology,
+                        contentDescription = null,
+                        tint = if (selecionado) CacauVerdeEscuro else CacauTextoSecundario,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                "Contar + Diagnosticar Doenças (2 IAs)",
+                                text = modo.nomeExibicao,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp,
-                                color = Color(0xFF1B5E20)
+                                color = if (selecionado) CacauVerdeEscuro else CacauTextoPrincipal
                             )
-                            Text(
-                                "Usa detector.tflite no preview (rápido, alto recall de frutos) e executa detector_doenca.tflite pós-foto para classificar Sadio, Vassoura, Podridão e Monilíase sem perder contagem.",
-                                fontSize = 12.sp,
-                                color = Color.DarkGray
-                            )
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Switch(
-                            checked = usarDiagnosticoSecundario,
-                            onCheckedChange = {
-                                usarDiagnosticoSecundario = it
-                                if (it) {
-                                    modeloExternoUri = null
-                                    modeloExternoNome = ""
-                                    labelsTexto = (com.example.myapplication.data.LABELS_DOENCA_CACAU + listOf("cacau", "fruto"))
-                                        .joinToString(", ")
+                            if (modo == ModoIACacau.COMBINADO_2_IAS) {
+                                Surface(color = CacauVerdeEscuro, shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        "RECOMENDADO",
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
                                 }
                             }
+                        }
+                        Text(
+                            text = modo.descricao,
+                            fontSize = 12.sp,
+                            color = CacauTextoSecundario,
+                            lineHeight = 16.sp
                         )
                     }
                 }
             }
+        }
 
-            // ── SEÇÃO 1: MODELOS EMBUTIDOS ──
-            item {
-                SectionHeader(icon = Icons.Default.Memory, title = "Modelos Embutidos no App")
-            }
+        // Calibração independente dos 2 limiares de confiança + máx detecções
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CacauBordaSuave),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Calibração Fina em Campo", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CacauTextoPrincipal)
 
-            items(MODELOS_EMBUTIDOS) { modelo ->
-                CartaoModeloEmbutido(
-                    modelo = modelo,
-                    selecionado = modeloSelecionado?.nomeArquivo == modelo.nomeArquivo &&
-                            modeloSelecionado?.nomeExibicao == modelo.nomeExibicao,
-                    onClick = {
-                        modeloSelecionado = modelo
-                        modeloExternoUri = null
-                        modeloExternoNome = ""
-                        usarDiagnosticoSecundario = false
-                        // Preenche os labels padrão do modelo
-                        labelsTexto = modelo.labelsDefault.joinToString(", ")
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Confiança Contagem (detector.tflite)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${(configAtual.threshold * 100).toInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CacauVerdeEscuro)
                     }
-                )
-            }
+                    Slider(
+                        value = configAtual.threshold.coerceIn(0.15f, 0.75f),
+                        onValueChange = { onAtualizarConfig(configAtual.copy(threshold = it)) },
+                        valueRange = 0.15f..0.75f,
+                        colors = SliderDefaults.colors(thumbColor = CacauVerdeEscuro, activeTrackColor = CacauVerdeBotanico)
+                    )
+                    Text("Valores menores detectam mais frutos em sombra densa.", fontSize = 11.sp, color = CacauTextoSecundario)
+                }
 
-            // ── SEÇÃO 2: MODELO EXTERNO ──
-            item {
-                SectionHeader(icon = Icons.Default.FolderOpen, title = "Importar Modelo Externo (.tflite)")
-            }
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Sensibilidade Doenças (detector_doenca.tflite)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${(configAtual.thresholdDoenca * 100).toInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CacauVerdeEscuro)
+                    }
+                    Slider(
+                        value = configAtual.thresholdDoenca.coerceIn(0.15f, 0.70f),
+                        onValueChange = { onAtualizarConfig(configAtual.copy(thresholdDoenca = it)) },
+                        valueRange = 0.15f..0.70f,
+                        enabled = configAtual.usaModeloCustomizado || modoEfetivo != ModoIACacau.SOMENTE_CONTAGEM,
+                        colors = SliderDefaults.colors(thumbColor = CacauVerdeEscuro, activeTrackColor = CacauVerdeBotanico)
+                    )
+                    Text("Controla sensibilidade para Podridão Parda, Monilíase e Vassoura.", fontSize = 11.sp, color = CacauTextoSecundario)
+                }
 
-            item {
-                Card(
+                Column {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Máximo de frutos por foto", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${configAtual.maxResultados}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CacauVerdeEscuro)
+                    }
+                    Slider(
+                        value = configAtual.maxResultados.toFloat().coerceIn(10f, 60f),
+                        onValueChange = { onAtualizarConfig(configAtual.copy(maxResultados = it.toInt().coerceIn(10, 60))) },
+                        valueRange = 10f..60f,
+                        steps = 9,
+                        colors = SliderDefaults.colors(thumbColor = CacauVerdeEscuro, activeTrackColor = CacauVerdeBotanico)
+                    )
+                }
+            }
+        }
+
+        // Seção colapsável para importação de modelos CEPEC experimentais (.tflite / .zip)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CacauBordaSuave),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(
-                            width = if (modeloExternoUri != null) 2.dp else 1.dp,
-                            color = if (modeloExternoUri != null) verde else Color.LightGray,
-                            shape = RoundedCornerShape(12.dp)
-                        ),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (modeloExternoUri != null) Color(0xFFE8F5E9) else Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                        .clickable { mostrarAvancado = !mostrarAvancado },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (modeloExternoUri != null) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, null, tint = verde)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Modelo carregado:", fontSize = 12.sp, color = Color.Gray)
-                            }
-                            Text(modeloExternoNome, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text(
-                                "⚠️ Após importar, configure os rótulos abaixo manualmente.",
-                                fontSize = 12.sp,
-                                color = Color(0xFFE65100)
-                            )
-                        } else {
-                            Text(
-                                "Selecione um arquivo .tflite exportado do seu treinamento YOLO/TFLite.",
-                                fontSize = 13.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Button(
-                            onClick = { launcherModelo.launch("*/*") },
-                            colors = ButtonDefaults.buttonColors(containerColor = verde),
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CacauVerdeEscuro, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Avançado: Modelo CEPEC Externo (.tflite / .zip)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    Icon(if (mostrarAvancado) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
+                }
+
+                AnimatedVisibility(visible = mostrarAvancado) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        Text(
+                            "Importe modelos YOLO treinados exclusivamente no acervo CEPEC de cacau (.tflite ou pacote .zip Ultralytics).",
+                            fontSize = 11.sp,
+                            color = CacauTextoSecundario
+                        )
+                        OutlinedButton(
+                            onClick = { launcherModelo.launch(arrayOf("*/*")) },
+                            shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Upload, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(if (modeloExternoUri != null) "TROCAR MODELO" else "SELECIONAR ARQUIVO .tflite")
+                            Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Importar Arquivo .tflite ou .zip", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
-                    }
-                }
-            }
 
-            // ── SEÇÃO 3: RÓTULOS (LABELS) ──
-            item {
-                SectionHeader(icon = Icons.Default.Label, title = "Rótulos Detectados (Labels)")
-            }
+                        feedbackImportacao?.let { msg ->
+                            Text(msg, fontSize = 11.sp, color = CacauInfo)
+                        }
 
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF9F9F9))
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "Somente objetos com estes rótulos serão contados. Deixe vazio para aceitar todos.",
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-
-                        // Chips dos labels atuais
-                        if (listaLabels.isNotEmpty()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                listaLabels.chunked(2).forEach { linha ->
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                                        linha.forEach { label ->
-                                            LabelChip(
-                                                texto = label,
-                                                onRemover = {
-                                                    val nova = listaLabels.toMutableList().also { l -> l.remove(label) }
-                                                    labelsTexto = nova.joinToString(", ")
-                                                }
+                        modelosImportados.forEach { m ->
+                            val ativo = configAtual.modeloInternoPath == m.path
+                            Surface(
+                                color = if (ativo) CacauVerdeClaro else Color(0xFFF6F8F6),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, if (ativo) CacauVerdeBotanico else CacauBordaSuave),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val report = ObjectDetectorHelper.inspecionarModeloArquivo(File(m.path))
+                                            onAtualizarConfig(
+                                                configAtual.copy(
+                                                    modeloSelecionado = null,
+                                                    modeloInternoPath = m.path,
+                                                    modeloExternoUri = null,
+                                                    modeloExternoNome = m.nomeExibicao,
+                                                    labelsFiltro = report.labelsExtraidas.ifEmpty { LABELS_DOENCA_CACAU },
+                                                    usarDiagnosticoSecundario = false,
+                                                    modoIA = ModoIACacau.SOMENTE_CONTAGEM
+                                                )
                                             )
                                         }
+                                        .padding(10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(m.nomeExibicao, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${formatarTamanhoMb(m.tamanhoBytes)} • ${if (ativo) "Ativo" else "Toque para ativar"}", fontSize = 11.sp, color = CacauTextoSecundario)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            PersistenciaLocalRegistros.excluirModeloImportado(context, m.path)
+                                            modelosImportados = PersistenciaLocalRegistros.listarModelosImportados(context)
+                                            if (ativo) {
+                                                onAtualizarConfig(configAtual.comModoIA(ModoIACacau.COMBINADO_2_IAS))
+                                            }
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Remover modelo", tint = CacauPerigo, modifier = Modifier.size(16.dp))
                                     }
                                 }
                             }
-                        } else {
-                            Text("Nenhum filtro — todos os objetos serão contados", color = Color.Gray, fontSize = 13.sp)
-                        }
-
-                        // Campo para adicionar novo label
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = novoLabel,
-                                onValueChange = { novoLabel = it },
-                                label = { Text("Adicionar rótulo") },
-                                placeholder = { Text("ex: cacau, fruto...") },
-                                modifier = Modifier.weight(1f),
-                                singleLine = true
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (novoLabel.isNotBlank()) {
-                                        val nova = listaLabels.toMutableList()
-                                        nova.add(novoLabel.trim().lowercase())
-                                        labelsTexto = nova.joinToString(", ")
-                                        novoLabel = ""
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(verde)
-                            ) {
-                                Icon(Icons.Default.Add, null, tint = Color.White)
-                            }
-                        }
-
-                        // Botão para limpar tudo
-                        if (listaLabels.isNotEmpty()) {
-                            TextButton(
-                                onClick = { labelsTexto = "" },
-                                colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
-                            ) {
-                                Icon(Icons.Default.ClearAll, null)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Aceitar todos os rótulos")
-                            }
                         }
                     }
                 }
             }
+        }
+    }
 
-            // ── SEÇÃO 4: THRESHOLD E MAX RESULTADOS ──
-            item {
-                SectionHeader(icon = Icons.Default.Tune, title = "Parâmetros de Detecção")
+    if (mostrarDiagnostico) {
+        DialogDiagnosticoSobre(
+            configAtual = configAtual,
+            inferenciaMsAtual = inferenciaMsAtual,
+            onDismiss = { mostrarDiagnostico = false }
+        )
+    }
+}
+
+@Composable
+private fun DialogDiagnosticoSobre(
+    configAtual: ModelConfig,
+    inferenciaMsAtual: Long,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val versaoApp = remember {
+        runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.versionName ?: "1.0"
+        }.getOrDefault("1.0")
+    }
+    val tamanhoContagem = remember { tamanhoAssetStr(context, "detector.tflite") }
+    val tamanhoDoenca = remember { tamanhoAssetStr(context, "detector_doenca.tflite") }
+    val nucleos = remember { (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Diagnóstico Técnico • CacauApp CEPEC", fontWeight = FontWeight.Bold, color = CacauVerdeEscuro)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LinhaDiagnostico("Versão do App", versaoApp)
+                LinhaDiagnostico("Modo IA Ativo", configAtual.modoEfetivo.nomeExibicao)
+                LinhaDiagnostico("Motor TFLite", "XNNPACK + CPU ($nucleos threads)")
+                LinhaDiagnostico("Entrada Tensor", "640 × 640 (Letterbox Isomórfico)")
+                LinhaDiagnostico("Latência Ao Vivo", if (inferenciaMsAtual > 0L) "$inferenciaMsAtual ms/frame" else "Aguardando câmera")
+                LinhaDiagnostico("detector.tflite", tamanhoContagem)
+                LinhaDiagnostico("detector_doenca.tflite", tamanhoDoenca)
+                LinhaDiagnostico("Classes Oficiais", LABELS_DOENCA_CACAU.joinToString(", "))
+                LinhaDiagnostico("Modelos Embutidos", "${MODELOS_EMBUTIDOS.size} oficiais CEPEC")
             }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = CacauVerdeEscuro)
+            ) {
+                Text("Fechar")
+            }
+        }
+    )
+}
 
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF9F9F9))
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+@Composable
+private fun LinhaDiagnostico(chave: String, valor: String) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(chave, fontSize = 12.sp, color = CacauTextoSecundario, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(8.dp))
+        Text(valor, fontSize = 12.sp, color = CacauTextoPrincipal, fontWeight = FontWeight.Bold)
+    }
+}
 
-                        // Threshold
-                        Column {
-                            val thresholdVal = thresholdTexto.toIntOrNull()?.coerceIn(1, 99) ?: 30
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                                Text("Confiança mínima: $thresholdVal%", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                if (thresholdVal > 60) {
-                                    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFECB3)) {
-                                        Text(
-                                            "⚠ Muito alto",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFFE65100),
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+private fun tamanhoAssetStr(context: Context, assetName: String): String {
+    return runCatching {
+        context.assets.openFd(assetName).use { fd ->
+            formatarTamanhoMb(fd.length)
+        }
+    }.getOrElse {
+        runCatching {
+            context.assets.open(assetName).use { formatarTamanhoMb(it.readBytes().size.toLong()) }
+        }.getOrDefault("N/D")
+    }
+}
+
+private fun formatarTamanhoMb(bytes: Long): String {
+    if (bytes <= 0L) return "0 MB"
+    val mb = bytes.toDouble() / (1024.0 * 1024.0)
+    return String.format(Locale.US, "%.1f MB", mb).replace('.', ',')
+}
+
+private fun importarModeloCustomizadoCacau(
+    context: Context,
+    uri: Uri,
+    configAtual: ModelConfig
+): Pair<ModelConfig?, String> {
+    return try {
+        val dir = File(context.filesDir, "modelos_ia").apply { mkdirs() }
+        val nomeOriginal = resolverNomeArquivoUri(context, uri)
+        val ts = System.currentTimeMillis()
+        var arquivoTflite: File? = null
+        val labelsExtras = mutableListOf<String>()
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val cabecalho = ByteArray(4)
+            val lidos = input.read(cabecalho)
+            input.close()
+            if (lidos < 4) return null to "Arquivo selecionado está vazio."
+
+            val isZip = ImportadorPlanilhaUniversal.isXlsxMagicBytes(cabecalho) || nomeOriginal.endsWith(".zip", ignoreCase = true)
+            if (isZip) {
+                context.contentResolver.openInputStream(uri)?.use { zipRaw ->
+                    ZipInputStream(zipRaw).use { zis ->
+                        while (true) {
+                            val entry = zis.nextEntry ?: break
+                            if (!entry.isDirectory && ImportadorPlanilhaUniversal.isSafeZipEntryName(entry.name)) {
+                                if (entry.name.endsWith(".tflite", ignoreCase = true) && arquivoTflite == null) {
+                                    val bytes = ImportadorPlanilhaUniversal.readZipEntryBounded(zis, 128 * 1024 * 1024)
+                                    if (bytes != null && ObjectDetectorHelper.isTfliteFlatBuffer(bytes)) {
+                                        val dest = File(dir, "cepec_${ts}.tflite")
+                                        dest.writeBytes(bytes)
+                                        arquivoTflite = dest
+                                    }
+                                } else if (entry.name.endsWith(".txt", ignoreCase = true) || entry.name.endsWith(".yaml", ignoreCase = true)) {
+                                    val lblBytes = ImportadorPlanilhaUniversal.readZipEntryBounded(zis, 512 * 1024)
+                                    if (lblBytes != null) {
+                                        labelsExtras.addAll(
+                                            ObjectDetectorHelper.parseLabelsDeTextoOuYaml(
+                                                String(lblBytes, Charsets.UTF_8),
+                                                entry.name
+                                            )
                                         )
                                     }
                                 }
                             }
-                            Text(
-                                if (thresholdVal > 60)
-                                    "Modelos em desenvolvimento costumam ter score entre 40–70%. Recomendamos 30–50%."
-                                else
-                                    "Detecções abaixo deste valor serão ignoradas. Para modelos novos, use valores baixos (20–40%).",
-                                fontSize = 12.sp,
-                                color = if (thresholdVal > 60) Color(0xFFE65100) else Color.Gray
-                            )
-                            Slider(
-                                value = thresholdVal.toFloat(),
-                                onValueChange = { thresholdTexto = it.toInt().toString() },
-                                valueRange = 10f..95f,
-                                steps = 16,
-                                colors = SliderDefaults.colors(thumbColor = if (thresholdVal > 60) Color(0xFFE65100) else verde, activeTrackColor = if (thresholdVal > 60) Color(0xFFE65100) else verde)
-                            )
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("10% (detecta mais)", fontSize = 11.sp, color = Color.Gray)
-                                Text("95%", fontSize = 11.sp, color = Color.Gray)
-                            }
-                        }
-
-                        Divider()
-
-                        // Max resultados
-                        Column {
-                            Text("Máximo de detecções: $maxResultados", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                            Text("Quantos objetos podem ser detectados por frame.", fontSize = 12.sp, color = Color.Gray)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                IconButton(onClick = { if (maxResultados > 1) maxResultados-- }) {
-                                    Icon(Icons.Default.RemoveCircle, null, tint = Color.Red, modifier = Modifier.size(36.dp))
-                                }
-                                Text("$maxResultados", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 24.dp))
-                                IconButton(onClick = { if (maxResultados < 50) maxResultados++ }) {
-                                    Icon(Icons.Default.AddCircle, null, tint = verde, modifier = Modifier.size(36.dp))
-                                }
-                            }
+                            zis.closeEntry()
                         }
                     }
                 }
-            }
-
-            // ── BOTÃO SALVAR ──
-            item {
-                Spacer(Modifier.height(8.dp))
-                val podeSalvar = modeloSelecionado != null || modeloExternoUri != null
-                Button(
-                    onClick = {
-                        val threshold = (thresholdTexto.toIntOrNull() ?: 30) / 100f
-                        onSalvar(
-                            ModelConfig(
-                                modeloSelecionado = modeloSelecionado,
-                                modeloExternoUri = modeloExternoUri,
-                                modeloExternoNome = modeloExternoNome,
-                                labelsFiltro = listaLabels,
-                                threshold = threshold,
-                                maxResultados = maxResultados,
-                                usarDiagnosticoSecundario = usarDiagnosticoSecundario && modeloExternoUri == null,
-                                modeloSecundarioArquivo = configAtual.modeloSecundarioArquivo
-                            )
-                        )
-                    },
-                    enabled = podeSalvar,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = verde)
-                ) {
-                    Icon(Icons.Default.Save, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("SALVAR CONFIGURAÇÃO", fontWeight = FontWeight.Bold)
+            } else {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: return null to "Não foi possível ler o arquivo."
+                if (!ObjectDetectorHelper.isTfliteFlatBuffer(bytes)) {
+                    return null to "Arquivo não possui assinatura TFL3 válida de modelo TensorFlow Lite."
                 }
-                Spacer(Modifier.height(16.dp))
+                val baseLimpo = nomeOriginal.substringBeforeLast(".").replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "modelo" }
+                val dest = File(dir, "${baseLimpo}_$ts.tflite")
+                dest.writeBytes(bytes)
+                arquivoTflite = dest
+            }
+        }
+
+        val arqFinal = arquivoTflite ?: return null to "Nenhum arquivo .tflite válido foi encontrado."
+        val report = ObjectDetectorHelper.inspecionarModeloArquivo(arqFinal)
+        if (!report.compativel) {
+            arqFinal.delete()
+            return null to report.avisoUsuario
+        }
+
+        val nomeAmigavel = nomeOriginal.substringBeforeLast(".").ifBlank { "Modelo CEPEC Customizado" }
+        PersistenciaLocalRegistros.salvarNomeModeloImportado(context, arqFinal.absolutePath, nomeAmigavel)
+        val labelsFinais = when {
+            report.labelsExtraidas.isNotEmpty() -> report.labelsExtraidas
+            labelsExtras.isNotEmpty() -> labelsExtras
+            else -> configAtual.labelsFiltro
+        }
+
+        val novoConfig = configAtual.copy(
+            modeloSelecionado = null,
+            modeloInternoPath = arqFinal.absolutePath,
+            modeloExternoUri = null,
+            modeloExternoNome = nomeAmigavel,
+            labelsFiltro = labelsFinais,
+            usarDiagnosticoSecundario = false,
+            modoIA = ModoIACacau.SOMENTE_CONTAGEM
+        )
+        novoConfig to report.detalhesTecnicos
+    } catch (e: Exception) {
+        null to "Erro ao importar modelo: ${e.message}"
+    }
+}
+
+private fun resolverNomeArquivoUri(context: Context, uri: Uri): String {
+    var result = "modelo_cacau.tflite"
+    runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) {
+                result = cursor.getString(idx) ?: result
             }
         }
     }
-}
-
-// ── Componentes auxiliares ──
-
-@Composable
-private fun SectionHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFF1B5E20))
-    }
-}
-
-@Composable
-private fun CartaoModeloEmbutido(
-    modelo: ModelEmbutido,
-    selecionado: Boolean,
-    onClick: () -> Unit
-) {
-    val verde = Color(0xFF2E7D32)
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = if (selecionado) 2.dp else 1.dp,
-                color = if (selecionado) verde else Color.LightGray,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = if (selecionado) Color(0xFFE8F5E9) else Color.White
-        ),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(
-            Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                if (selecionado) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
-                null,
-                tint = if (selecionado) verde else Color.Gray
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(modelo.nomeExibicao, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text(modelo.descricao, fontSize = 12.sp, color = Color.Gray)
-                Text(
-                    "Labels: ${modelo.labelsDefault.joinToString(", ")}",
-                    fontSize = 11.sp,
-                    color = Color(0xFF558B2F)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LabelChip(texto: String, onRemover: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = Color(0xFFE8F5E9),
-        modifier = Modifier.border(1.dp, Color(0xFF81C784), RoundedCornerShape(20.dp))
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-            Text(texto, fontSize = 13.sp, color = Color(0xFF2E7D32))
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Remover $texto",
-                tint = Color(0xFF2E7D32),
-                modifier = Modifier
-                    .size(14.dp)
-                    .clickable { onRemover() }
-            )
-        }
-    }
+    return result
 }

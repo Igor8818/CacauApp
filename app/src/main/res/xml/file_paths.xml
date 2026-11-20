@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="exports" path="exports/" />
+    <files-path name="modelos_ia" path="modelos_ia/" />
+    <external-files-path name="pictures" path="Pictures/" />
+    <external-path name="downloads_cepec" path="Download/CEPEC/" />
+</paths>
