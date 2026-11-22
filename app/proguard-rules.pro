@@ -1,21 +1,24 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Regras R8 / ProGuard do CacauApp
+-keepattributes Signature,InnerClasses
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# TensorFlow Lite (CPU, XNNPACK & GPU Delegate), Task Vision & CameraX
+-keep class org.tensorflow.lite.** { *; }
+-dontwarn org.tensorflow.lite.**
+-keep class org.tensorflow.lite.support.** { *; }
+-keep class org.tensorflow.lite.task.** { *; }
+-keep class androidx.camera.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# OkHttp / Okio / TLS opcionais
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+-dontwarn org.bouncycastle.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Modelos, ViewModel, Rede e Serialização Local
+-keep class br.gov.ceplac.cepec.cacauapp.data.** { *; }
+-keep class br.gov.ceplac.cepec.cacauapp.viewmodel.** { *; }
+-keep class br.gov.ceplac.cepec.cacauapp.network.** { *; }
+-keep class br.gov.ceplac.cepec.cacauapp.userinterface.CaixaAuditavel { *; }
+-keep class br.gov.ceplac.cepec.cacauapp.userinterface.util.PersistenciaLocalRegistros$* { *; }

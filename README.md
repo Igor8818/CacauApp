@@ -12,10 +12,10 @@
   <img src="https://img.shields.io/badge/Android-SDK%2024%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android SDK 24+" />
   <img src="https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
   <img src="https://img.shields.io/badge/TensorFlow%20Lite-YOLOv8-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow Lite" />
-  <img src="https://img.shields.io/badge/Tests-33%20Passed-25A162?style=for-the-badge&logo=junit5&logoColor=white" alt="33 Unit Tests Passing" />
+  <img src="https://img.shields.io/badge/Tests-54%20Passed-25A162?style=for-the-badge&logo=junit5&logoColor=white" alt="54 Unit Tests Passing" />
 </p>
 
-Aplicativo Android nativo **100% Offline-First** de **Visão Computacional On-Device**, projetado em **Kotlin 2.0 + Jetpack Compose + CameraX + TensorFlow Lite** para executar inferência em tempo real com **pipeline duplo de modelos YOLOv8**, revisão vetorial *Human-in-the-Loop* pós-captura e sincronização em lote resiliente em cenários críticos sem internet.
+Aplicativo Android nativo **100% Offline-First** (`br.gov.ceplac.cepec.cacauapp`) de **Visão Computacional On-Device**, projetado em **Kotlin 2.0 + Jetpack Compose (MVVM com `CacauViewModel` + `StateFlow`) + CameraX + TensorFlow Lite** para executar inferência em tempo real com **pipeline duplo de modelos YOLOv8**, revisão vetorial *Human-in-the-Loop* pós-captura e sincronização em lote resiliente em cenários críticos sem internet.
 
 > 🔗 **Arquitetura Cliente-Servidor Completa:** Sincroniza de forma idempotente (via auto-descoberta HTTP/Wi-Fi `/24` ou túnel reverso **USB ADB**) com a [**CacauSync API**](https://github.com/Igor8818/CacauSync) (**Java 21 + Spring Boot 3 + React 18 + PostgreSQL**).  
 > 🧬 **Runtime Open-Source Desacoplado:** Conheça também o [**BreedAI**](https://github.com/Igor8818/BreedAI), evolução *open-source* (MIT) deste motor com leitura nativa de `.xlsx` e suporte plugável a qualquer modelo `.tflite`.
@@ -65,7 +65,7 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
   * Hot-reload de `files/rota_precarregada.json` via cabo USB ADB, botão **`Atualizar do PC`** direto da API **CacauSync** ou importação local de planilhas `.csv` na ordem exata (`#1 → #N`).
 * **🔌 Sincronização 1-Clique Zero-Config (`CacauSyncClient`):**
   * Auto-descoberta via ponte USB ADB (`127.0.0.1:8080`) ou scan Wi-Fi `/24`, autenticação JWT Bearer, envio em lote `POST /api/v1/coletas/sync-json` com caixas normalizadas (`0.0`–`1.0`) e upload multipart de fotos JPEG com correção EXIF e proteção anti-OOM.
-* **📊 Exportação Offline RFC 4180:** Geração imediata de CSV UTF-8 em `Download/CEPEC`.
+* **📊 Exportação Offline RFC 4180 & Pacote ZIP via Streaming:** Geração imediata de CSV UTF-8 (`Download/CEPEC`), ranking clonal (`kg/ha` e `@/ha`) e empacotamento ZIP via *streaming* em buffer de 8 KB (anti-OOM).
 
 ---
 
@@ -73,12 +73,12 @@ O **CacauApp** resolve este gargalo ao unificar **visão computacional local**, 
 
 | Camada | Tecnologias Utilizadas |
 |---|---|
-| **Linguagem & Plataforma** | Kotlin `2.0.21`, Android SDK (`minSdk 24`, `targetSdk 36`, AGP `9.0.0`) |
-| **Interface de Usuário** | Jetpack Compose, Material Design 3, Material Icons Extended, Coil `2.6.0` |
-| **Câmera & Visão Computacional** | CameraX `1.5.3`, TensorFlow Lite `2.16.1` (+ GPU Delegate), YOLOv8 (`640x640` Float32) |
+| **Linguagem & Plataforma** | Kotlin `2.0.21`, Android SDK (`minSdk 24`, `targetSdk 36`, AGP `9.0.0`), pacote `br.gov.ceplac.cepec.cacauapp`, R8/ProGuard Release |
+| **Arquitetura & Interface** | **MVVM** (`CacauViewModel` + `StateFlow` / `SharedFlow`), Jetpack Compose, Material Design 3, Material Icons Extended, Coil `2.6.0` |
+| **Câmera & Visão Computacional** | CameraX `1.5.3`, TensorFlow Lite `2.16.1` (+ GPU Delegate + XNNPACK fallback), YOLOv8 (`640x640` Float32) |
 | **Rede & Sincronização** | OkHttp `4.12.0`, JSON nativo Android, Network Security Config |
-| **Geolocalização & Hardware** | Google Play Services Location `21.2.0` (`FusedLocationProviderClient`), ExifInterface |
-| **Qualidade & CI** | JUnit 4 (**33 testes unitários**), Mockito `5.11.0`, GitHub Actions CI |
+| **Geolocalização & Hardware** | Google Play Services Location `21.2.0` (`FusedLocationProviderClient` Fine/Coarse), ExifInterface |
+| **Qualidade & CI** | JUnit 4 (**54 testes unitários**), Mockito `5.11.0`, GitHub Actions CI |
 
 ---
 
@@ -111,8 +111,8 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-### Suíte de Testes Unitários (**33 Testes Passing**)
-* `CsvParsingUnitTest` (4) • `DomainConcordanceIntegrationTest` (4) • `LetterboxAndGeometryUnitTest` (9) • `ModelAndStateUnitTest` (8) • `YoloDetectionAndScaleUnitTest` (8).
+### Suíte de Testes Unitários (**54 Testes Passing**)
+* `CacauViewModelUnitTest` (5) • `CsvParsingUnitTest` (4) • `DomainConcordanceIntegrationTest` (4) • `ImportadorXlsxUnitTest` (4) • `LetterboxAndGeometryUnitTest` (9) • `ModelAndStateUnitTest` (9) • `RendimentoCacauUnitTest` (5) • `RevisaoGeometriaUnitTest` (6) • `YoloDetectionAndScaleUnitTest` (8).
 
 ---
 

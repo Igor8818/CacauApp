@@ -7,13 +7,13 @@ android {
     aaptOptions {
         noCompress("tflite")
     }
-    namespace = "com.example.myapplication"
+    namespace = "br.gov.ceplac.cepec.cacauapp"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.myapplication"
+        applicationId = "br.gov.ceplac.cepec.cacauapp"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -24,7 +24,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
